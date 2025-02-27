@@ -8,6 +8,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
 import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
+import { ipfsCidToUrl } from '../../lib/tableland/client';
 
 // Interface for the question answer JSON sent to XMTP
 interface QuestionAnswerRequest {
@@ -530,24 +531,35 @@ const StudyPage: React.FC = () => {
         />
         <div className="bg-red-900/20 text-red-400 p-6 rounded-lg text-center">
           <X size={48} weight="bold" className="mx-auto mb-2" />
-        <h2 className="text-xl font-bold mb-2">{t('common.error')}</h2>
+          <h2 className="text-xl font-bold mb-2">{t('common.error')}</h2>
           <p>{songError?.message || questionsError?.message || t('study.noQuestions')}</p>
           <Link to={`/song/${title}`} className="mt-4 inline-block text-indigo-400">
             {t('common.goBack')}
           </Link>
-      </div>
+        </div>
       </div>
     );
   }
   
   return (
     <div className="container mx-auto px-4 py-6">
-      {/* Page header with back button */}
-      <PageHeader
-        leftIcon={<CaretLeft size={24} />}
-        leftLink={`/song/${title}`}
-        title={t('study.title')}
-      />
+      {/* Page header with back button and progress bar */}
+      <div className="mb-8 flex items-center gap-4">
+        <Link
+          to={`/song/${title}`}
+          className="text-neutral-400 hover:text-white transition-colors flex-shrink-0"
+        >
+          <CaretLeft size={24} />
+        </Link>
+        
+        {/* Progress bar - now in header */}
+        <div className="h-2 bg-neutral-800 rounded-full flex-1">
+          <div 
+            className="h-full bg-blue-500 rounded-full transition-all duration-300"
+            style={{ width: `${((currentIndex + 1) / totalQuestions) * 100}%` }}
+          />
+        </div>
+      </div>
       
       {/* XMTP Connection Status */}
       {!isXmtpReady && (
@@ -563,108 +575,124 @@ const StudyPage: React.FC = () => {
           onClick={toggleStudyLanguage}
           className="flex items-center gap-1 text-sm bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 rounded-md"
         >
-          <GlobeSimple size={18} weight="bold" className="text-indigo-400" />
+          <GlobeSimple size={18} weight="bold" className="text-blue-500" />
           <span>{studyLanguage === 'en' ? '中文题目' : 'English Questions'}</span>
         </button>
       </div>
       
-      {/* Question card */}
-      <div className="bg-neutral-800 rounded-lg border border-neutral-700 p-5 mb-6">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold">{t('study.question')} {currentIndex + 1}/{totalQuestions}</h3>
-          <span className="text-sm text-neutral-400">{studyLanguage === 'en' ? 'English' : '中文'}</span>
+      {/* Main content area with fixed heights to prevent layout shifts */}
+      <div className="grid grid-rows-[auto_1fr] gap-4 min-h-[calc(100vh-250px)]">
+        {/* Top section with avatar, question and feedback - fixed height */}
+        <div className="grid md:grid-cols-[auto_1fr] gap-4">
+          {/* Avatar - centered on mobile, left on desktop */}
+          <div className="flex justify-center md:block md:pr-4">
+            <img 
+              src="/images/scarlett-peace.png" 
+              alt="Scarlett"
+              className="w-24 h-24 rounded-full object-cover"
+            />
+          </div>
+          
+          {/* Messages Container - fixed height to prevent layout shifts */}
+          <div className="flex flex-col gap-4">
+            {/* Question Message */}
+            <div className="p-4 rounded-lg bg-neutral-800 w-full flex items-center min-h-[80px]">
+              <p className="text-md text-white">
+                {currentQuestion.question}
+              </p>
             </div>
+            
+            {/* Feedback Message Container - Fixed height container */}
+            <div className="h-[100px] w-full relative">
+              {/* Actual feedback content with absolute positioning */}
+              <div className={`absolute inset-0 p-4 rounded-lg bg-neutral-800 transition-opacity duration-300 ${!feedback ? 'opacity-0' : 'opacity-100'}`}>
+                {feedback && (
+                  <>
+                    {/* Explanation text with padding to avoid button overlap */}
+                    <div className="pr-12">
+                      <p className="text-md text-white">
+                        {feedback.explanation}
+                      </p>
+                    </div>
+                    
+                    {/* Audio button positioned at bottom right to avoid text overlap */}
+                    {isValidating ? (
+                      <div className="absolute bottom-3 right-3">
+                        <div className="w-8 h-8 flex items-center justify-center">
+                          <Spinner size="sm" color="primary" />
+                        </div>
+                      </div>
+                    ) : feedback.audioCid && (
+                      <div className="absolute bottom-3 right-3">
+                        <button
+                          onClick={handleToggleAudio}
+                          disabled={isAudioLoading}
+                          className="p-1 rounded-full bg-neutral-700 hover:bg-neutral-600 transition-colors w-8 h-8 flex items-center justify-center"
+                          aria-label={isAudioPlaying ? "Pause audio" : "Play audio"}
+                        >
+                          {isAudioLoading ? (
+                            <Spinner size="sm" color="white" />
+                          ) : isAudioPlaying ? (
+                            <Pause size={16} weight="fill" className="text-white" />
+                          ) : (
+                            <Play size={16} weight="fill" className="text-white" />
+                          )}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
         
-        <p className="text-lg mb-6">{currentQuestion.question}</p>
-        
-        <div className="space-y-3">
+        {/* Answer Options - in a separate container that doesn't shift - MADE BIGGER */}
+        <div className="space-y-4 mt-4">
           {['a', 'b', 'c', 'd'].map((option) => (
             <button
               key={option}
               onClick={() => handleAnswerSelect(option as 'a' | 'b' | 'c' | 'd')}
               disabled={!!selectedAnswer || isValidating || !isXmtpReady}
-              className={`w-full text-left p-3 rounded-lg flex items-start transition-colors ${
+              className={`w-full text-left p-4 rounded-lg flex items-start transition-colors text-lg ${
                 selectedAnswer === option
                   ? currentQuestion.userAnswer === option && currentQuestion.isCorrect
                     ? 'bg-green-900/30 border border-green-700'
                     : currentQuestion.userAnswer === option
                     ? 'bg-red-900/30 border border-red-700'
-                    : 'bg-indigo-900/30 border border-indigo-700'
+                    : 'bg-blue-900/30 border border-blue-700'
                   : 'bg-neutral-700 hover:bg-neutral-600'
               } ${!!selectedAnswer || isValidating || !isXmtpReady ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              <span className="inline-block w-6 h-6 rounded-full bg-neutral-600 text-center mr-3 flex-shrink-0">
+              <span className="inline-block w-8 h-8 rounded-full bg-neutral-600 text-center mr-4 flex-shrink-0 flex items-center justify-center">
                 {option}
               </span>
               <span>{currentQuestion.options[option as keyof typeof currentQuestion.options]}</span>
-              </button>
-          ))}
-            </div>
-        
-        {/* Feedback message */}
-        {feedback && (
-          <div className={`mt-6 p-4 rounded-lg ${
-            isValidating 
-              ? 'bg-neutral-700/50 border border-neutral-600' 
-              : feedback.isCorrect
-              ? 'bg-green-900/30 border border-green-700'
-              : 'bg-red-900/30 border border-red-700'
-          }`}>
-            <p className="font-medium mb-2">
-              {isValidating 
-                ? t('study.checking') 
-                : feedback.isCorrect 
-                ? t('study.correct') 
-                : t('study.incorrect')}
-            </p>
-            <p className="text-neutral-300">{feedback.explanation}</p>
-          </div>
-        )}
-          </div>
-          
-      {/* Navigation buttons */}
-      <div className="flex justify-between">
-        <div>
-          {/* Audio button - only show if feedback with audio is available */}
-          {feedback && feedback.audioCid && (
-            <button
-              onClick={handleToggleAudio}
-              disabled={isAudioLoading}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
-                isAudioPlaying
-                  ? 'bg-indigo-700 text-white'
-                  : 'bg-neutral-800 text-white hover:bg-neutral-700'
-              } ${isAudioLoading ? 'opacity-50 cursor-wait' : ''}`}
-            >
-              {isAudioLoading ? (
-                <Spinner size="sm" color="white" />
-              ) : isAudioPlaying ? (
-                <Pause size={20} weight="fill" />
-              ) : (
-                <Play size={20} weight="fill" />
-              )}
-              {isAudioLoading
-                ? t('study.loadingAudio')
-                : isAudioPlaying
-                ? t('study.pauseAudio')
-                : isAudioFinished
-                ? t('study.replayAudio')
-                : t('study.playAudio')}
             </button>
-          )}
+          ))}
         </div>
-        
-              <button
-          onClick={goToNextQuestion}
-          disabled={!selectedAnswer || isValidating}
-          className={`flex items-center gap-2 px-6 py-2 rounded-lg bg-indigo-600 text-white ${
-            !selectedAnswer || isValidating ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-700'
-          }`}
-        >
-          {currentIndex === totalQuestions - 1 ? t('study.finish') : t('study.next')}
-          <ArrowRight size={20} weight="bold" />
-              </button>
       </div>
+          
+      {/* Navigation buttons - fixed at bottom - UPDATED COLOR AND LOCALIZATION */}
+      {selectedAnswer && !isValidating && (
+        <div className="fixed bottom-0 left-0 right-0 bg-neutral-900 border-t border-neutral-800 p-4">
+          <div className="container mx-auto">
+            <button
+              onClick={goToNextQuestion}
+              disabled={!selectedAnswer || isValidating}
+              className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-blue-500 text-white text-lg ${
+                !selectedAnswer || isValidating ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-600'
+              }`}
+            >
+              {currentIndex === totalQuestions - 1 ? t('study.finish') : t('study.next')}
+              <ArrowRight size={20} weight="bold" />
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {/* Hidden audio element for playing sounds */}
+      <audio ref={audioRef} className="hidden" />
     </div>
   );
 };

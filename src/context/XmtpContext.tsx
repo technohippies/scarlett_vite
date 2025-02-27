@@ -444,11 +444,11 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       // If we successfully created a client
       if (xmtpClient) {
-        setClient(xmtpClient);
-        setIsConnected(true);
-        
-        // Load conversations
-        await loadConversations();
+            setClient(xmtpClient);
+            setIsConnected(true);
+            
+            // Load conversations
+            await loadConversations();
       } else {
         // If all attempts failed, throw the last error
         if (lastError) {
@@ -723,7 +723,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
 
   // Send a message to a conversation
   const sendMessage = async (conversationId: string, message: string | object) => {
-    if (!client) {
+      if (!client) {
       logger.error('Cannot send message: No XMTP client available');
       throw new Error('No XMTP client available');
     }
@@ -810,7 +810,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
 
   // Get or create a conversation with an address
   const getOrCreateConversation = async (address: string) => {
-    if (!client) {
+      if (!client) {
       logger.error('Cannot get conversation: No XMTP client available');
       throw new Error('No XMTP client available');
     }
