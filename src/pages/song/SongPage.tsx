@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
@@ -9,7 +9,6 @@ import PageHeader from '../../components/layout/PageHeader';
 const SongPage: React.FC = () => {
   const { title } = useParams<{ title: string }>();
   const { t, i18n } = useTranslation();
-  const navigate = useNavigate();
   const { song, loading, error } = useSongByTitle(title || null);
   const currentLanguage = i18n.language;
   
@@ -22,10 +21,6 @@ const SongPage: React.FC = () => {
   const getCefrLabel = (level: number) => {
     const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
     return levels[level - 1] || 'Unknown';
-  };
-  
-  const handleGoBack = () => {
-    navigate('/');
   };
   
   if (loading) {

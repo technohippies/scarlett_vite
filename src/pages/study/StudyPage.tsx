@@ -36,7 +36,7 @@ interface XmtpMessage {
 }
 
 // Custom replacer function to handle BigInt values during JSON serialization
-const bigIntReplacer = (key: string, value: any) => {
+const bigIntReplacer = (_key: string, value: any) => {
   // Convert BigInt to String during serialization
   if (typeof value === 'bigint') {
     return value.toString() + 'n';
