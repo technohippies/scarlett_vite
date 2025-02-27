@@ -8,8 +8,8 @@ export interface Song {
   lyrics_cid: string;
   cover_img_cid: string;
   thumb_img_cid: string;
-  questions_cid_1: string; // English questions
-  questions_cid_2: string; // Chinese questions
+  questions_cid_1: string; // Chinese questions
+  questions_cid_2: string; // English questions
   language_1: string; // Primary language (e.g., 'en')
   language_2: string; // Secondary language (e.g., 'zh')
   cefr_level: number;

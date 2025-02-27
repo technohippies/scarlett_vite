@@ -16,7 +16,6 @@
     "@phosphor-icons/react": "^2.1.7",
     "@reown/appkit": "^1.6.9",
     "@reown/appkit-adapter-wagmi": "^1.6.9",
-    "@tableland/sdk": "^7.2.1",
     "@unlock-protocol/contracts": "^0.0.33",
     "@unlock-protocol/networks": "^0.0.25",
     "@unlock-protocol/unlock-js": "^0.51.2",

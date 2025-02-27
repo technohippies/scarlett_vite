@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { useQuestions } from '../../hooks/useQuestions';
-import { Play, Pause, ArrowRight, User, X } from '@phosphor-icons/react';
+import { Play, Pause, ArrowRight, X, GlobeSimple } from '@phosphor-icons/react';
 import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
@@ -50,8 +50,16 @@ const StudyPage: React.FC = () => {
   const { song, loading: songLoading, error: songError } = useSongByTitle(title || null);
   const xmtp = useXmtp();
   
-  // Get the appropriate questions CID based on language
-  const questionsCid = song ? (currentLanguage === 'en' ? song.questions_cid_1 : song.questions_cid_2) : undefined;
+  // Add state to track the selected study language (which may be different from UI language)
+  const [studyLanguage, setStudyLanguage] = useState<'en' | 'zh'>(currentLanguage);
+  
+  // Update study language when browser language changes
+  useEffect(() => {
+    setStudyLanguage(currentLanguage);
+  }, [currentLanguage]);
+  
+  // Get the appropriate questions CID based on selected study language
+  const questionsCid = song ? (studyLanguage === 'en' ? song.questions_cid_2 : song.questions_cid_1) : undefined;
   
   const { 
     questions, 
@@ -61,8 +69,14 @@ const StudyPage: React.FC = () => {
     goToNextQuestion,
     setQuestionAnswer,
     currentIndex,
-    totalQuestions
-  } = useQuestions(questionsCid, currentLanguage);
+    totalQuestions,
+    resetQuestions
+  } = useQuestions(questionsCid, studyLanguage);
+  
+  // Reset questions when study language changes
+  useEffect(() => {
+    resetQuestions();
+  }, [studyLanguage, resetQuestions]);
   
   const [selectedAnswer, setSelectedAnswer] = useState<'a' | 'b' | 'c' | 'd' | null>(null);
   const [feedback, setFeedback] = useState<{
@@ -147,17 +161,17 @@ const StudyPage: React.FC = () => {
           : botResponse.answer === answer;
         
         // Update feedback with the bot's response
-        setFeedback({
-          isCorrect,
+      setFeedback({
+        isCorrect,
           explanation: botResponse.explanation || (isCorrect ? 'Correct!' : 'Incorrect'),
           audioCid: botResponse.audio_cid
-        });
-        
-        // Update question state
+      });
+      
+      // Update question state
         setQuestionAnswer(
-          currentQuestion.uuid,
-          answer,
-          isCorrect,
+          currentQuestion.uuid, 
+          answer, 
+          isCorrect, 
           {
             uuid: currentQuestion.uuid,
             answer: botResponse.answer,
@@ -469,6 +483,12 @@ const StudyPage: React.FC = () => {
     }
   };
   
+  // Add function to toggle study language
+  const toggleStudyLanguage = () => {
+    const newLanguage = studyLanguage === 'en' ? 'zh' : 'en';
+    setStudyLanguage(newLanguage);
+  };
+  
   const loading = songLoading || questionsLoading;
   const error = songError || questionsError;
   
@@ -507,6 +527,17 @@ const StudyPage: React.FC = () => {
         progressPercent={((currentIndex + 1) / totalQuestions) * 100}
       />
 
+      {/* Language Selector */}
+      <div className="mb-4 flex justify-end">
+        <button 
+          onClick={toggleStudyLanguage}
+          className="flex items-center gap-1 text-sm bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 rounded-md"
+        >
+          <GlobeSimple size={18} weight="bold" className="text-indigo-400" />
+          <span>{studyLanguage === 'en' ? '中文题目' : 'English Questions'}</span>
+        </button>
+      </div>
+      
       {/* XMTP Connection Status */}
       {!isXmtpReady && (
         <div className="bg-blue-900/20 text-blue-400 p-3 rounded-lg mb-4 flex items-center justify-center gap-2">
@@ -536,9 +567,9 @@ const StudyPage: React.FC = () => {
                     e.currentTarget.parentElement?.appendChild(icon);
                   }}
                 />
-              </div>
             </div>
-            
+          </div>
+          
             {/* Messages Container */}
             <div className="flex flex-col gap-4">
               {/* Question Message */}
@@ -560,9 +591,9 @@ const StudyPage: React.FC = () => {
                     {/* Explanation text with padding to avoid button overlap */}
                     <div className="pr-12">
                       {!isValidating && (
-                        <p className="font-medium mb-1">
-                          {feedback.isCorrect ? t('questions.correct') : t('questions.incorrect')}
-                        </p>
+                <p className="font-medium mb-1">
+                  {feedback.isCorrect ? t('questions.correct') : t('questions.incorrect')}
+                </p>
                       )}
                       <p>{feedback.explanation}</p>
                     </div>
@@ -590,8 +621,8 @@ const StudyPage: React.FC = () => {
                 )}
               </div>
             </div>
-          </div>
-          
+        </div>
+        
           {/* Answer Options */}
           <div className="space-y-3 mt-4">
             {(['a', 'b', 'c', 'd'] as const).map((option) => (
@@ -624,7 +655,7 @@ const StudyPage: React.FC = () => {
       {feedback && !isValidating && (
         <div className="fixed bottom-0 left-0 right-0 bg-neutral-900 border-t border-neutral-800 p-4">
           <div className="container mx-auto px-4">
-            <button
+      <button
               className="w-full py-3 rounded-lg flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white"
               onClick={() => goToNextQuestion()}
             >
@@ -637,7 +668,7 @@ const StudyPage: React.FC = () => {
                   {t('questions.nextQuestion')} <ArrowRight size={16} weight="bold" />
                 </div>
               )}
-            </button>
+      </button>
           </div>
         </div>
       )}
