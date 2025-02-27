@@ -37,6 +37,126 @@ const formatMessageTime = (timestamp: Date) => {
   return timestamp.toLocaleDateString();
 };
 
+// Add a helper function to identify bot messages
+const isBotMessage = (message: any, ourWalletAddress?: string, previousMessages?: any[]): boolean => {
+  console.log('Checking if message is from bot with our address:', ourWalletAddress);
+  
+  // First check if we have direction information
+  if (message.direction === 'received') {
+    console.log('Message is from bot (direction: received)');
+    return true; // Messages received are from the bot
+  }
+  
+  if (message.direction === 'sent') {
+    console.log('Message is from user (direction: sent)');
+    return false; // Messages sent are from the user
+  }
+  
+  // Check for XMTP v3 specific fields
+  if (message.senderInboxId) {
+    // Known bot inbox ID from logs
+    const BOT_INBOX_ID = '460e9b4204ba118295c86606a37cfd4413fafec90d90d4631f8526f23638cc8d';
+    
+    // In XMTP v3, we can compare inbox IDs
+    const isBotInboxId = message.senderInboxId === BOT_INBOX_ID;
+    if (isBotInboxId) {
+      console.log('Message is from bot (inbox ID matches bot)');
+      return true;
+    }
+    
+    // If we have our inbox ID, check if the sender is us
+    if (message.ourInboxId && message.senderInboxId === message.ourInboxId) {
+      console.log('Message is from user (inbox ID matches our inbox)');
+      return false;
+    }
+  }
+  
+  // If we have sender address, check if it matches the bot address
+  if (message.senderAddress) {
+    const senderMatches = message.senderAddress.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase();
+    if (senderMatches) {
+      console.log('Message is from bot (sender address matches)');
+      return true;
+    }
+    
+    // If we have our wallet address, check if the sender is us
+    if (ourWalletAddress && message.senderAddress.toLowerCase() === ourWalletAddress.toLowerCase()) {
+      console.log('Message is from user (sender address matches our wallet)');
+      return false;
+    }
+  }
+  
+  // Check for message sequence - in XMTP v3, messages often come in pairs
+  // If we sent a message and then received a response, the response is likely from the bot
+  if (message.id && previousMessages && previousMessages.length > 0) {
+    const lastMessage = previousMessages[previousMessages.length - 1];
+    if (lastMessage.sender === 'user' && message.id !== lastMessage.id) {
+      // If the last message was from the user and this is a different message,
+      // it's likely a response from the bot
+      console.log('Message is likely from bot (response to user message)');
+      return true;
+    }
+  }
+  
+  // Check for conversation topic - in XMTP v3, the conversation topic can help identify the sender
+  if (message.conversationId) {
+    console.log('Message has conversation ID:', message.conversationId);
+    // If we know this is a conversation with the bot, and we didn't send it, it's from the bot
+    if (message.conversationId.includes(SCARLETT_BOT_ADDRESS.toLowerCase())) {
+      console.log('Message is likely from bot (conversation ID includes bot address)');
+      return true;
+    }
+  }
+  
+  // Check content patterns as a last resort
+  const isErrorMessage = typeof message.content === 'string' && (
+    message.content.includes('Sorry, I encountered an error processing your message') ||
+    message.content.includes("Sorry, I'm having trouble connecting right now")
+  );
+  
+  const isBotGreeting = typeof message.content === 'string' && (
+    message.content.startsWith('I am Scarlett') || 
+    message.content.includes("I'm Scarlett") ||
+    message.content.startsWith('Hey there') ||
+    message.content.includes('Bali') ||
+    message.content.includes('sunset') ||
+    message.content.includes('handsome')
+  );
+  
+  // Check for typical bot response patterns
+  const isBotResponse = typeof message.content === 'string' && (
+    // Error/apology messages
+    message.content.includes("I'm sorry") ||
+    message.content.includes("I apologize") ||
+    message.content.includes("having trouble") ||
+    // Greeting patterns
+    message.content.includes("Hello!") ||
+    message.content.includes("Hi there") ||
+    // Typical bot responses
+    message.content.includes("How can I help") ||
+    message.content.includes("Is there anything else") ||
+    // Question responses
+    message.content.includes("?") && message.content.length > 40 ||
+    // Typical bot content
+    message.content.includes("China") && message.content.includes("😊") ||
+    // Math responses
+    message.content.includes("2 + 2 equals 4") ||
+    // Any message with emoji and longer than 40 chars is likely from the bot
+    message.content.includes("😊") && message.content.length > 40
+  );
+  
+  // Log the content-based identification
+  console.log('Message identification by content:', {
+    content: message.content,
+    isErrorMessage,
+    isBotGreeting,
+    isBotResponse,
+    isBot: isErrorMessage || isBotGreeting || isBotResponse
+  });
+  
+  return isErrorMessage || isBotGreeting || isBotResponse;
+};
+
 const HomePage: React.FC = () => {
   const { t } = useTranslation();
   const { songs, loading, error } = useAllSongs();
@@ -70,9 +190,41 @@ const HomePage: React.FC = () => {
     try {
       setSendStatus('Loading conversation with Scarlett bot...');
       
+      // Get our wallet address and inbox ID for comparison
+      const walletAddress = await xmtp.client.address;
+      console.log('Our wallet address:', walletAddress);
+      
+      // Try to get our inbox ID from the client if available
+      let ourInboxId = null;
+      try {
+        // This is a guess at the property name - may need adjustment based on actual SDK
+        if (xmtp.client.inboxId) {
+          ourInboxId = xmtp.client.inboxId;
+          console.log('Our inbox ID:', ourInboxId);
+        }
+      } catch (error) {
+        console.log('Could not get our inbox ID:', error);
+      }
+      
       // Use the getOrCreateConversation method to ensure we always use the same conversation
       const conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
       console.log('Got conversation with Scarlett bot:', conversation);
+      
+      // Try to get the bot's inbox ID from the conversation if available
+      let botInboxId = null;
+      try {
+        // These are guesses at property names - may need adjustment based on actual SDK
+        if (conversation.peerInboxId) {
+          botInboxId = conversation.peerInboxId;
+          console.log('Bot inbox ID:', botInboxId);
+        } else if (conversation.topic && conversation.topic.includes('inbox')) {
+          // Some implementations might encode the inbox ID in the topic
+          console.log('Conversation topic:', conversation.topic);
+        }
+      } catch (error) {
+        console.log('Could not get bot inbox ID:', error);
+      }
+      
       setBotConversation(conversation);
       
       // Load messages from this conversation
@@ -80,9 +232,8 @@ const HomePage: React.FC = () => {
         const messages = await conversation.messages();
         console.log(`Loaded ${messages.length} messages from conversation`);
         
-        // Get our wallet address for comparison
-        const walletAddress = await xmtp.client.address;
-        console.log('Our wallet address:', walletAddress);
+        // Create a local array to accumulate formatted messages
+        const processedMessages: any[] = [];
         
         // Map messages to our format with enhanced logging
         const formattedMessages = messages.map((msg: any) => {
@@ -96,40 +247,30 @@ const HomePage: React.FC = () => {
               sent: msg.sent,
               messageVersion: msg.messageVersion,
               contentTopic: msg.contentTopic,
-              direction: msg.direction
+              direction: msg.direction,
+              // Add any XMTP v3 specific fields we can find
+              senderInboxId: msg.senderInboxId,
+              recipientInboxId: msg.recipientInboxId
             });
             
-            // In XMTP v3, we can use the direction property if available
-            // or check if we're the sender by comparing with our wallet address
-            let isFromBot = false;
-            
-            if (msg.direction === 'received') {
-              // If direction is 'received', it's from the bot
-              isFromBot = true;
-              console.log('Message is from bot (direction: received)');
-            } else if (msg.direction === 'sent') {
-              // If direction is 'sent', it's from us
-              isFromBot = false;
-              console.log('Message is from user (direction: sent)');
-            } else {
-              // If direction is not available, use content-based heuristics
-              const isErrorMessage = typeof msg.content === 'string' && 
-                msg.content.includes('Sorry, I encountered an error processing your message');
-              const isBotGreeting = typeof msg.content === 'string' && 
-                (msg.content.startsWith('I am Scarlett') || 
-                 msg.content.startsWith('Hey there') ||
-                 msg.content.includes('Bali'));
-              
-              // Determine if message is from bot based on content patterns
-              isFromBot = isErrorMessage || isBotGreeting;
-              
-              console.log('Message identification by content:', {
-                content: msg.content,
-                isErrorMessage,
-                isBotGreeting,
-                isFromBot
-              });
+            // Enhance the message with our inbox ID if available
+            if (ourInboxId) {
+              msg.ourInboxId = ourInboxId;
             }
+            
+            // For XMTP v3, determine if this is a message we sent or received
+            // If we don't have direction information, try to infer it
+            if (!msg.direction) {
+              // In XMTP v3, we can sometimes determine direction by comparing inbox IDs
+              if (msg.senderInboxId && ourInboxId) {
+                msg.direction = msg.senderInboxId === ourInboxId ? 'sent' : 'received';
+                console.log(`Inferred message direction: ${msg.direction} based on inbox ID comparison`);
+              }
+            }
+            
+            // Use the helper function to determine if message is from bot
+            // Pass the accumulated messages so far for context
+            const isFromBot = isBotMessage(msg, walletAddress, processedMessages);
             
             const formattedMessage = {
               id: msg.id || Date.now().toString(),
@@ -137,6 +278,9 @@ const HomePage: React.FC = () => {
               sender: isFromBot ? 'bot' : 'user',
               timestamp: new Date(msg.sent || Date.now())
             };
+            
+            // Add this formatted message to our accumulator for context in future messages
+            processedMessages.push(formattedMessage);
             
             console.log('Formatted message:', formattedMessage);
             return formattedMessage;
@@ -173,10 +317,26 @@ const HomePage: React.FC = () => {
       
       let cleanup: (() => void) | null = null;
       
+      // Get our wallet address and inbox ID for comparison
+      const getWalletAddress = async () => {
+        if (xmtp?.client) {
+          return await xmtp.client.address;
+        }
+        return null;
+      };
+      
+      // Try to get our inbox ID
+      const getOurInboxId = async () => {
+        if (xmtp?.client && xmtp.client.inboxId) {
+          return xmtp.client.inboxId;
+        }
+        return null;
+      };
+      
       // Create a stream of messages
       try {
         // Use the stream method instead of streamMessages
-        const stream = botConversation.stream((error: Error | null, message: any) => {
+        const stream = botConversation.stream(async (error: Error | null, message: any) => {
           if (error) {
             console.error('Error in message stream:', error);
             return;
@@ -187,6 +347,7 @@ const HomePage: React.FC = () => {
             return;
           }
           
+          // Log the raw message with any XMTP v3 specific fields we can find
           console.log('New message received:', {
             id: message.id,
             content: message.content,
@@ -195,50 +356,76 @@ const HomePage: React.FC = () => {
             sent: message.sent,
             messageVersion: message.messageVersion,
             contentTopic: message.contentTopic,
-            direction: message.direction
+            direction: message.direction,
+            conversationId: message.conversationId,
+            // Add any XMTP v3 specific fields
+            senderInboxId: message.senderInboxId,
+            recipientInboxId: message.recipientInboxId,
+            // Add timestamp for debugging
+            receivedAt: new Date().toISOString()
           });
+          
+          // Get our wallet address and inbox ID
+          const walletAddress = await getWalletAddress();
+          console.log('Our wallet address for stream message:', walletAddress);
+          
+          const ourInboxId = await getOurInboxId();
+          if (ourInboxId) {
+            message.ourInboxId = ourInboxId;
+            console.log('Our inbox ID for stream message:', ourInboxId);
+          }
+          
+          // For XMTP v3, we need to determine if this is a message we sent or received
+          // If we don't have direction information, try to infer it
+          if (!message.direction) {
+            // In XMTP v3, we can sometimes determine direction by comparing inbox IDs
+            if (message.senderInboxId && ourInboxId) {
+              message.direction = message.senderInboxId === ourInboxId ? 'sent' : 'received';
+              console.log(`Inferred message direction: ${message.direction} based on inbox ID comparison`);
+            }
+          }
           
           // Only add the message if it's not already in the chat
           setChatMessages(prev => {
+            // Check if this message already exists in our chat by ID
             const messageExists = prev.some(msg => msg.id === message.id);
             
-            if (!messageExists) {
-              // In XMTP v3, we can use the direction property if available
-              let isFromBot = false;
+            // For user messages coming from the stream, we need to be extra careful about duplicates
+            const isFromBot = isBotMessage(message, walletAddress, prev);
+            
+            // If this is a user message, check for duplicates by content
+            if (!isFromBot && !messageExists) {
+              // Check if this message content matches any recent user message
+              const recentUserMessageWithSameContent = prev.find(msg => 
+                msg.sender === 'user' && 
+                msg.content === message.content &&
+                // Only consider messages sent in the last 30 seconds as potential duplicates
+                (new Date().getTime() - msg.timestamp.getTime() < 30000)
+              );
               
-              if (message.direction === 'received') {
-                // If direction is 'received', it's from the bot
-                isFromBot = true;
-                console.log('Stream message is from bot (direction: received)');
-              } else if (message.direction === 'sent') {
-                // If direction is 'sent', it's from us
-                isFromBot = false;
-                console.log('Stream message is from user (direction: sent)');
-              } else {
-                // If direction is not available, use content-based heuristics
-                const isErrorMessage = typeof message.content === 'string' && 
-                  message.content.includes('Sorry, I encountered an error processing your message');
-                const isBotGreeting = typeof message.content === 'string' && 
-                  (message.content.startsWith('I am Scarlett') || 
-                   message.content.startsWith('Hey there') ||
-                   message.content.includes('Bali'));
-                
-                // Determine if message is from bot based on content patterns
-                isFromBot = isErrorMessage || isBotGreeting;
-                
-                console.log('Stream message identification by content:', {
-                  content: message.content,
-                  isErrorMessage,
-                  isBotGreeting,
-                  isFromBot
+              if (recentUserMessageWithSameContent) {
+                console.log('Detected duplicate user message, skipping:', {
+                  streamMessage: message.content,
+                  existingMessage: recentUserMessageWithSameContent
                 });
+                return prev; // Don't add this message
               }
-              
+            }
+            
+            console.log('Message exists check:', {
+              messageContent: message.content,
+              exists: messageExists,
+              isFromBot,
+              prevMessages: prev.map(m => ({id: m.id, content: m.content.substring(0, 20) + '...', sender: m.sender}))
+            });
+            
+            if (!messageExists) {
               const formattedMessage = {
                 id: message.id || Date.now().toString(),
                 content: typeof message.content === 'object' ? JSON.stringify(message.content) : message.content,
                 sender: isFromBot ? 'bot' : 'user',
-                timestamp: new Date(message.sent || Date.now())
+                timestamp: new Date(message.sent || Date.now()),
+                fromStream: true // Flag to indicate this message came from the stream
               };
               
               console.log('Formatted message:', formattedMessage);
@@ -300,16 +487,34 @@ const HomePage: React.FC = () => {
       }
       
       if (conversation) {
+        // Generate a client-side ID for this message to prevent duplicates
+        const clientGeneratedId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        
         // Add the message to the local chat immediately for better UX
         const newMessage = {
-          id: Date.now().toString(),
+          id: clientGeneratedId, // Use our client-generated ID
+          clientGeneratedId, // Store this for later comparison
           content: messageContent,
-          sender: 'user',
+          sender: 'user', // Always user for messages we send
           timestamp: new Date(),
-          isBot: false
+          isBot: false,
+          direction: 'sent' // Explicitly mark as sent
         };
         
         setChatMessages(prev => {
+          // Check if this message already exists in our chat
+          const messageExists = prev.some(msg => 
+            msg.content === messageContent && 
+            msg.sender === 'user' &&
+            // Only consider messages sent in the last 5 seconds as potential duplicates
+            (new Date().getTime() - msg.timestamp.getTime() < 5000)
+          );
+          
+          if (messageExists) {
+            console.log('Message already exists in chat, not adding duplicate');
+            return prev;
+          }
+          
           const newMessages = [...prev, newMessage];
           // Keep only the last INITIAL_MESSAGE_COUNT messages plus the new one
           if (newMessages.length > INITIAL_MESSAGE_COUNT) {
