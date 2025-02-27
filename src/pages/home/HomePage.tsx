@@ -34,7 +34,7 @@ const HomePage: React.FC = () => {
   
   // Function to send a message to a specific address
   const sendMessageToAddress = async () => {
-    if (!xmtp || !xmtp.isConnected) {
+    if (!xmtp || !xmtp.client) {
       setSendStatus('Please connect to XMTP first');
       return;
     }
@@ -47,31 +47,52 @@ const HomePage: React.FC = () => {
       setSendStatus('Sending message to bot...');
       console.log(`Sending message to ${botAddress}: ${messageContent}`);
       
-      await xmtp.sendMessage(botAddress, messageContent);
+      // Use the direct conversation creation approach that worked
+      let conversation;
+      try {
+        // Try to find existing conversation first
+        conversation = await xmtp.client.conversations.find(botAddress);
+        console.log('Found existing conversation with bot');
+      } catch (error) {
+        // If not found, create a new conversation
+        console.log('Creating new conversation with bot:', botAddress);
+        try {
+          conversation = await xmtp.client.conversations.newDm(botAddress);
+          console.log('New conversation created successfully');
+        } catch (error: any) {
+          console.error('Error creating conversation:', error);
+          setSendStatus(`Error creating conversation: ${error.message}`);
+          return;
+        }
+      }
       
-      console.log('Message sent successfully!');
-      setSendStatus('Message sent successfully!');
-      
-      // Add the message to the local chat
-      const newMessage = {
-        id: Date.now().toString(),
-        content: messageContent,
-        sender: 'user',
-        timestamp: new Date(),
-      };
-      
-      setChatMessages(prev => [...prev, newMessage]);
-      
-      // Add a note about the message being sent
-      const botMessage = {
-        id: (Date.now() + 1).toString(),
-        content: `Message sent to your bot at ${botAddress}. Check your bot logs for the response!`,
-        sender: 'bot',
-        timestamp: new Date(),
-        isBot: true
-      };
-      
-      setChatMessages(prev => [...prev, botMessage]);
+      if (conversation) {
+        // Send the message
+        await conversation.send(messageContent);
+        console.log('Message sent successfully!');
+        setSendStatus('Message sent successfully!');
+        
+        // Add the message to the local chat
+        const newMessage = {
+          id: Date.now().toString(),
+          content: messageContent,
+          sender: 'user',
+          timestamp: new Date(),
+        };
+        
+        setChatMessages(prev => [...prev, newMessage]);
+        
+        // Add a note about the message being sent
+        const botMessage = {
+          id: (Date.now() + 1).toString(),
+          content: `Message sent to your bot at ${botAddress}. Check your bot logs for the response!`,
+          sender: 'bot',
+          timestamp: new Date(),
+          isBot: true
+        };
+        
+        setChatMessages(prev => [...prev, botMessage]);
+      }
     } catch (error) {
       console.error('Error sending message:', error);
       setSendStatus(`Error sending message: ${error instanceof Error ? error.message : String(error)}`);
@@ -373,24 +394,31 @@ const HomePage: React.FC = () => {
     try {
       setSendStatus('Checking if bot address can be messaged...');
       
-      // First check using the static method
-      const staticCanMessageMap = await Client.canMessage([botAddress], 'dev');
-      const staticCanMessage = staticCanMessageMap.get(botAddress);
+      // Use our improved canMessage method
+      const canMessageMap = await xmtp.canMessage([botAddress]);
+      const canMessage = canMessageMap.get(botAddress);
       
-      // Then check using the client instance method
-      const clientCanMessageMap = await xmtp.client?.canMessage([botAddress]);
-      const clientCanMessage = clientCanMessageMap?.get(botAddress);
+      // Also check if we can find an existing conversation
+      let hasExistingConversation = false;
+      try {
+        if (xmtp.client) {
+          await xmtp.client.conversations.find(botAddress);
+          hasExistingConversation = true;
+        }
+      } catch (error) {
+        hasExistingConversation = false;
+      }
       
       setSendStatus(`Bot diagnostics:
-        - Static canMessage: ${staticCanMessage ? 'YES' : 'NO'}
-        - Client canMessage: ${clientCanMessage ? 'YES' : 'NO'}
+        - Can message: ${canMessage ? 'YES' : 'NO'}
+        - Has existing conversation: ${hasExistingConversation ? 'YES' : 'NO'}
         - Bot address: ${botAddress}
         - Environment: dev
       `);
       
       console.log('Bot diagnostics:', {
-        staticCanMessage,
-        clientCanMessage,
+        canMessage,
+        hasExistingConversation,
         botAddress,
         environment: 'dev'
       });

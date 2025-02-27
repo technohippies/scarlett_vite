@@ -649,6 +649,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       // Reload conversations to get the updated messages
       await loadConversations();
+      
+      return sentMessage;
     } catch (error) {
       console.error('Error sending message:', error);
       throw error;
@@ -658,8 +660,55 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   // Check if an address can be messaged
   const canMessage = async (addresses: string[]): Promise<Map<string, boolean>> => {
     try {
-      // Use the static method with the dev environment
-      return await Client.canMessage(addresses, 'dev');
+      if (!client) {
+        console.warn('Cannot check if address can be messaged: No XMTP client');
+        return new Map();
+      }
+      
+      const results = new Map<string, boolean>();
+      
+      // First try the static method
+      try {
+        const staticResults = await Client.canMessage(addresses, 'dev');
+        // Copy results from static method
+        for (const [address, canMsg] of staticResults.entries()) {
+          results.set(address, canMsg);
+        }
+      } catch (error) {
+        console.error('Error using static canMessage method:', error);
+      }
+      
+      // For each address, also try to create a conversation as a more reliable check
+      for (const address of addresses) {
+        try {
+          // Try to find or create a conversation
+          try {
+            await client.conversations.find(address);
+            // If we get here, the conversation exists
+            results.set(address, true);
+          } catch (error) {
+            // If not found, try to create a new conversation
+            try {
+              await client.conversations.newDm(address);
+              // If we get here, we can message this address
+              results.set(address, true);
+            } catch (error) {
+              // If we can't create a conversation, set to false
+              if (!results.has(address)) {
+                results.set(address, false);
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`Error checking if address ${address} can be messaged:`, error);
+          // Only set to false if we don't already have a result
+          if (!results.has(address)) {
+            results.set(address, false);
+          }
+        }
+      }
+      
+      return results;
     } catch (error) {
       console.error('Error checking if address can be messaged:', error);
       return new Map();
