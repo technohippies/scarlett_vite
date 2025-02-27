@@ -33,4 +33,5 @@ export interface XmtpContextType {
   resetXmtpConnection: () => void;
   sendMessage: (conversationId: string, message: string | object) => Promise<void>;
   loadConversations: () => Promise<void>;
+  canMessage: (addresses: string[]) => Promise<Map<string, boolean>>;
 } 

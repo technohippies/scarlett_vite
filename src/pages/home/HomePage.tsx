@@ -7,6 +7,7 @@ import { ipfsCidToUrl } from '../../lib/tableland/client';
 import { useAppKit } from '../../context/ReownContext';
 import { useXmtp } from '../../context/XmtpContext';
 import XmtpConnectButton from '../../components/XmtpConnectButton';
+import { Client } from '@xmtp/browser-sdk';
 
 // Mock chat messages for demonstration
 const MOCK_CHAT_MESSAGES = [
@@ -22,6 +23,7 @@ const HomePage: React.FC = () => {
   const [chatMessages, setChatMessages] = useState(MOCK_CHAT_MESSAGES);
   const appKit = useAppKit();
   const xmtp = useXmtp();
+  const [sendStatus, setSendStatus] = useState<string | null>(null);
   
   // Check XMTP connection status
   useEffect(() => {
@@ -29,6 +31,52 @@ const HomePage: React.FC = () => {
       console.log('XMTP connection status:', xmtp.isConnected);
     }
   }, [xmtp]);
+  
+  // Function to send a message to a specific address
+  const sendMessageToAddress = async () => {
+    if (!xmtp || !xmtp.isConnected) {
+      setSendStatus('Please connect to XMTP first');
+      return;
+    }
+    
+    // Use the bot address from the logs - this is running on the dev network
+    const botAddress = '0x3e506025BaEB9BAA8001218D37B329dC030576C9'; // Your bot address from the logs
+    const messageContent = 'Hello from Scarlett Tutor! This is a test message.';
+    
+    try {
+      setSendStatus('Sending message to bot...');
+      console.log(`Sending message to ${botAddress}: ${messageContent}`);
+      
+      await xmtp.sendMessage(botAddress, messageContent);
+      
+      console.log('Message sent successfully!');
+      setSendStatus('Message sent successfully!');
+      
+      // Add the message to the local chat
+      const newMessage = {
+        id: Date.now().toString(),
+        content: messageContent,
+        sender: 'user',
+        timestamp: new Date(),
+      };
+      
+      setChatMessages(prev => [...prev, newMessage]);
+      
+      // Add a note about the message being sent
+      const botMessage = {
+        id: (Date.now() + 1).toString(),
+        content: `Message sent to your bot at ${botAddress}. Check your bot logs for the response!`,
+        sender: 'bot',
+        timestamp: new Date(),
+        isBot: true
+      };
+      
+      setChatMessages(prev => [...prev, botMessage]);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      setSendStatus(`Error sending message: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   
   const handleConnectWallet = async () => {
     try {
@@ -314,6 +362,96 @@ const HomePage: React.FC = () => {
     }, 1000);
   };
   
+  const checkBotAddress = async () => {
+    if (!xmtp) {
+      setSendStatus('Please connect to XMTP first');
+      return;
+    }
+    
+    const botAddress = '0x3e506025BaEB9BAA8001218D37B329dC030576C9';
+    
+    try {
+      setSendStatus('Checking if bot address can be messaged...');
+      
+      // First check using the static method
+      const staticCanMessageMap = await Client.canMessage([botAddress], 'dev');
+      const staticCanMessage = staticCanMessageMap.get(botAddress);
+      
+      // Then check using the client instance method
+      const clientCanMessageMap = await xmtp.client?.canMessage([botAddress]);
+      const clientCanMessage = clientCanMessageMap?.get(botAddress);
+      
+      setSendStatus(`Bot diagnostics:
+        - Static canMessage: ${staticCanMessage ? 'YES' : 'NO'}
+        - Client canMessage: ${clientCanMessage ? 'YES' : 'NO'}
+        - Bot address: ${botAddress}
+        - Environment: dev
+      `);
+      
+      console.log('Bot diagnostics:', {
+        staticCanMessage,
+        clientCanMessage,
+        botAddress,
+        environment: 'dev'
+      });
+    } catch (error) {
+      console.error('Error checking bot address:', error);
+      setSendStatus(`Error checking bot address: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  
+  const forceCreateConversation = async () => {
+    if (!xmtp || !xmtp.client) {
+      setSendStatus('Please connect to XMTP first');
+      return;
+    }
+    
+    const botAddress = '0x3e506025BaEB9BAA8001218D37B329dC030576C9';
+    
+    try {
+      setSendStatus('Forcing conversation creation with bot...');
+      
+      // Try to directly create a conversation without checking canMessage
+      let conversation;
+      try {
+        // Try to find existing conversation first
+        conversation = await xmtp.client.conversations.find(botAddress);
+        setSendStatus('Found existing conversation with bot!');
+      } catch (error) {
+        // If not found, create a new conversation
+        console.log('Creating new conversation with bot:', botAddress);
+        try {
+          conversation = await xmtp.client.conversations.newDm(botAddress);
+          setSendStatus('Successfully created new conversation with bot!');
+        } catch (error: any) {
+          console.error('Error creating conversation:', error);
+          setSendStatus(`Error creating conversation: ${error.message}`);
+          return;
+        }
+      }
+      
+      if (conversation) {
+        // Try to send a test message
+        const testMessage = 'Hello bot, this is a test message from force create!';
+        await conversation.send(testMessage);
+        setSendStatus('Successfully sent test message to bot!');
+        
+        // Add the message to the local chat
+        const newMessage = {
+          id: Date.now().toString(),
+          content: testMessage,
+          sender: 'user',
+          timestamp: new Date(),
+        };
+        
+        setChatMessages(prev => [...prev, newMessage]);
+      }
+    } catch (error) {
+      console.error('Error in force create conversation:', error);
+      setSendStatus(`Error in force create: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  
   return (
     <div className="container mx-auto px-4 py-6">
       {/* Songs Section */}
@@ -368,25 +506,75 @@ const HomePage: React.FC = () => {
         <div className="bg-neutral-800 rounded-lg shadow-sm border border-neutral-700 flex-1 overflow-hidden flex flex-col">
           <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-64">
             {xmtp?.isConnected ? (
-              chatMessages.map((msg) => (
-                <div 
-                  key={msg.id} 
-                  className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
+              <>
+                {chatMessages.map((msg) => (
                   <div 
-                    className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                      msg.sender === 'user' 
-                        ? 'bg-indigo-600 text-white' 
-                        : 'bg-neutral-700 text-white'
-                    }`}
+                    key={msg.id} 
+                    className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    <p className="text-sm">{msg.content}</p>
-                    <p className="text-xs opacity-70 mt-1">
-                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </p>
+                    <div 
+                      className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                        msg.sender === 'user' 
+                          ? 'bg-indigo-600 text-white' 
+                          : 'bg-neutral-700 text-white'
+                      }`}
+                    >
+                      <p className="text-sm">{msg.content}</p>
+                      <p className="text-xs opacity-70 mt-1">
+                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
                   </div>
+                ))}
+                
+                <div className="mt-4 flex flex-col gap-2">
+                  {!xmtp?.isConnected ? (
+                    <button 
+                      onClick={handleConnectWallet}
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
+                    >
+                      Connect to XMTP
+                    </button>
+                  ) : (
+                    <>
+                      <button 
+                        onClick={sendMessageToAddress}
+                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
+                      >
+                        Send Message to Scarlett Bot
+                      </button>
+                      <p className="text-sm text-gray-600 mt-1">
+                        This will send a test message to your Scarlett bot running on the dev network.
+                      </p>
+                      
+                      <button 
+                        onClick={checkBotAddress}
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mt-2"
+                      >
+                        Check Bot Address
+                      </button>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Check if the bot address can be messaged on the XMTP network.
+                      </p>
+                      
+                      <button 
+                        onClick={forceCreateConversation}
+                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded mt-2"
+                      >
+                        Force Create Conversation
+                      </button>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Bypass canMessage check and directly try to create a conversation with the bot.
+                      </p>
+                    </>
+                  )}
+                  {sendStatus && (
+                    <p className={`mt-2 ${sendStatus.includes('Error') ? 'text-red-500' : 'text-green-500'} whitespace-pre-line`}>
+                      {sendStatus}
+                    </p>
+                  )}
                 </div>
-              ))
+              </>
             ) : (
               <div className="flex flex-col items-center justify-center h-full">
                 <p className="text-neutral-400 mb-4 text-center">{t('chat.connectXmtp')}</p>

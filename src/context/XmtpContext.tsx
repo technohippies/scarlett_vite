@@ -1,11 +1,9 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useRef, useCallback } from 'react';
 // Import directly from @xmtp/browser-sdk
-import { Client, Signer } from '@xmtp/browser-sdk';
+import { Client } from '@xmtp/browser-sdk';
 import { useAppKit } from './ReownContext';
 import { XmtpContextType, Conversation } from '../types/chat';
 // Import Viem and Wagmi
-import { createWalletClient, custom } from 'viem';
-import { baseSepolia } from 'viem/chains';
 import { useSignMessage, useAccount, useWalletClient } from 'wagmi';
 // Import ethers for alternative implementation
 import { ethers } from 'ethers';
@@ -227,7 +225,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
           });
           
           const xmtpClient = await Client.create(signer, encryptionKey, { 
-            env: 'production'
+            env: 'dev'
           });
           console.log('XMTP client created successfully:', !!xmtpClient);
           
@@ -428,7 +426,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       // Create the XMTP client
       console.log('Creating XMTP client with ethers signer...');
       const xmtpClient = await Client.create(xmtpEthersSigner, encryptionKey, {
-        env: 'production'
+        env: 'dev'
       });
       
       console.log('XMTP client created successfully with ethers:', !!xmtpClient);
@@ -613,11 +611,14 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   const sendMessage = async (conversationId: string, message: string | object) => {
     if (!client) {
       console.warn('Cannot send message: No XMTP client');
-      return;
+      throw new Error('Cannot send message: XMTP client not initialized. Please connect to XMTP first.');
     }
     
     try {
       console.log(`Sending message to ${conversationId}:`, message);
+      
+      // Skip the canMessage check since it might be giving false negatives
+      // and directly try to create a conversation
       
       // Find or create conversation with the peer
       let conversation;
@@ -628,7 +629,14 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       } catch (error) {
         // If not found, create a new conversation
         console.log('Creating new conversation with:', conversationId);
-        conversation = await client.conversations.newConversation(conversationId);
+        // For @xmtp/browser-sdk version 0.0.21, we need to use newDm instead of newConversation
+        try {
+          conversation = await client.conversations.newDm(conversationId);
+          console.log('New conversation created successfully');
+        } catch (convError: any) {
+          console.error('Error creating new conversation:', convError);
+          throw new Error(`Failed to create conversation with ${conversationId}: ${convError.message}`);
+        }
       }
       
       if (!conversation) {
@@ -647,6 +655,17 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     }
   };
 
+  // Check if an address can be messaged
+  const canMessage = async (addresses: string[]): Promise<Map<string, boolean>> => {
+    try {
+      // Use the static method with the dev environment
+      return await Client.canMessage(addresses, 'dev');
+    } catch (error) {
+      console.error('Error checking if address can be messaged:', error);
+      return new Map();
+    }
+  };
+
   // Context value
   const contextValue: XmtpContextType = {
     client,
@@ -659,7 +678,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     disconnectXmtp,
     resetXmtpConnection,
     sendMessage,
-    loadConversations
+    loadConversations,
+    canMessage
   };
 
   console.log('XmtpProvider rendering with context:', { 
