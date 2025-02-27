@@ -162,7 +162,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       <header className="bg-neutral-800 border-b border-neutral-700 sticky top-0 z-10">
         <div className="container mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
-            <h1 className="text-xl font-bold">{t('app.name')}</h1>
+            <div className="text-lg font-bold">{t('app.name')}</div>
           </div>
           
           <div className="flex items-center gap-4">

@@ -1,24 +1,90 @@
 import { defineConfig } from 'vite'
-import path from "path"
+import path from 'path'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import tsconfigPaths from 'vite-tsconfig-paths'
 
-// https://vite.dev/config/
+// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
+    tsconfigPaths(),
   ],
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      '@': path.resolve(__dirname, './src'),
+      'protobufjs/minimal.js': 'protobufjs/minimal',
+      'buffer': 'buffer',
+    },
+    mainFields: ['browser', 'module', 'main'],
+  },
+  define: {
+    // Polyfill for process.env
+    'process.env': {},
+    'global': 'globalThis',
+  },
+  optimizeDeps: {
+    exclude: [
+      '@xmtp/wasm-bindings',
+      '@xmtp/browser-sdk'
+    ],
+    include: [
+      'protobufjs/minimal',
+      'buffer',
+    ],
+    esbuildOptions: {
+      target: 'es2020',
+      supported: { 
+        bigint: true 
+      },
     },
   },
-  // Add define property to provide process.env to the browser
-  define: {
-    // Provide a polyfill for process.env
-    'process.env': {},
-    // Ensure global process is available
-    'global': {},
+  build: {
+    target: 'es2020',
+    commonjsOptions: {
+      transformMixedEsModules: true,
+      include: [/protobufjs/, /node_modules/],
+    },
+  },
+  server: {
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
+    fs: {
+      // Allow serving files from node_modules
+      allow: ['..']
+    }
+  },
+  worker: {
+    format: 'es',
+    plugins: () => [
+      {
+        name: 'worker-globals',
+        resolveId(id) {
+          if (id === 'virtual:worker-globals') {
+            return id;
+          }
+          return null;
+        },
+        load(id) {
+          if (id === 'virtual:worker-globals') {
+            return `
+              if (typeof window === 'undefined') {
+                globalThis.window = globalThis;
+              }
+              if (typeof global === 'undefined') {
+                globalThis.global = globalThis;
+              }
+              if (typeof process === 'undefined') {
+                globalThis.process = { env: {} };
+              }
+            `;
+          }
+          return null;
+        }
+      }
+    ]
   }
 })

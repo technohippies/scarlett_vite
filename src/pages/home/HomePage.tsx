@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useAllSongs } from '../../hooks/useSongs';
-import { MagnifyingGlass, ArrowRight } from '@phosphor-icons/react';
+import { ArrowRight } from '@phosphor-icons/react';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
 import { useAppKit } from '../../context/ReownContext';
 import { useXmtp } from '../../context/XmtpContext';
@@ -40,110 +40,221 @@ const HomePage: React.FC = () => {
       }
       
       // First, ensure the user is connected to Reown
-      let signer = null;
-      
-      // Check if user is already connected
-      const isConnected = appKit.getIsConnectedState && typeof appKit.getIsConnectedState === 'function' 
-        ? appKit.getIsConnectedState() 
-        : false;
-      
-      console.log('User is already connected:', isConnected);
-      
-      if (!isConnected) {
-        console.log('User not connected, opening Reown login');
-        // Open Reown login if not connected
-        if (typeof appKit.open === 'function') {
-          console.log('Using appKit.open() method in HomePage');
-          await appKit.open();
-          
-          // Wait for the login to complete
-          console.log('Waiting for login to complete...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        } else if (appKit.auth && typeof appKit.auth.signIn === 'function') {
-          console.log('Using appKit.auth.signIn() method in HomePage');
-          await appKit.auth.signIn();
-          
-          // Wait for the login to complete
-          console.log('Waiting for login to complete...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        } else {
-          console.warn('AppKit methods not available in HomePage:', appKit);
-          alert('Authentication is not available yet. Please try again later.');
-          return;
-        }
-      }
-      
-      // Try to get the address from AppKit
-      let address = null;
-      
-      console.log('Attempting to get address from AppKit');
       console.log('AppKit methods available:', Object.keys(appKit));
       
-      // Method 1: Try getAddress
-      if (appKit.getAddress && typeof appKit.getAddress === 'function') {
-        try {
-          address = await appKit.getAddress();
-          console.log('Address from appKit.getAddress():', address);
-        } catch (error) {
-          console.error('Error getting address from appKit.getAddress():', error);
-        }
-      }
-      
-      // Method 2: Try getCaipAddress
-      if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
-        try {
-          const caipAddress = await appKit.getCaipAddress();
-          console.log('CAIP address:', caipAddress);
+      // Open Reown login
+      if (typeof appKit.open === 'function') {
+        console.log('Using appKit.open() method in HomePage');
+        appKit.open();
+        
+        // Wait for the login to complete
+        console.log('Waiting for login to complete...');
+        
+        // Instead of using setTimeout, let's wait for the address to be available
+        let address = null;
+        let attempts = 0;
+        const maxAttempts = 10;
+        
+        while (!address && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
           
-          // Extract the address part from the CAIP format (e.g., eip155:1:0x123... -> 0x123...)
-          if (caipAddress && typeof caipAddress === 'string') {
-            const parts = caipAddress.split(':');
-            if (parts.length === 3) {
-              address = parts[2];
-              console.log('Extracted address from CAIP:', address);
+          // Try to get address using different methods
+          if (typeof appKit.getAddress === 'function') {
+            try {
+              address = await appKit.getAddress();
+              if (address) {
+                console.log('Got address after login:', address);
+                break;
+              }
+            } catch (error) {
+              console.log('Still waiting for address...');
             }
           }
+          
+          if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
+            try {
+              const caipAddress = await appKit.getCaipAddress();
+              if (caipAddress && typeof caipAddress === 'string') {
+                const parts = caipAddress.split(':');
+                if (parts.length === 3) {
+                  address = parts[2];
+                  console.log('Got CAIP address after login:', caipAddress);
+                  console.log('Extracted address:', address);
+                  break;
+                }
+              }
+            } catch (error) {
+              console.log('Still waiting for CAIP address...');
+            }
+          }
+          
+          console.log(`Attempt ${attempts}/${maxAttempts} to get address...`);
+        }
+        
+        if (!address) {
+          console.warn('Failed to get address after waiting');
+          // Continue anyway, as the XMTP context might handle this automatically
+        }
+      } else if (appKit.auth && typeof appKit.auth.signIn === 'function') {
+        console.log('Using appKit.auth.signIn() method in HomePage');
+        appKit.auth.signIn();
+        
+        // Wait for the login to complete
+        console.log('Waiting for login to complete...');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      } else {
+        console.warn('AppKit methods not available in HomePage:', appKit);
+        alert('Authentication is not available yet. Please try again later.');
+        return;
+      }
+      
+      // Check if XMTP is already connected
+      if (xmtp && xmtp.isConnected) {
+        console.log('Already connected to XMTP');
+        return;
+      }
+      
+      // Check if we have a provider after login
+      console.log('Checking for provider after login');
+      
+      // Get the provider from AppKit
+      let provider = null;
+      if (typeof appKit.getProvider === 'function') {
+        try {
+          provider = await appKit.getProvider();
+          console.log('Provider from appKit.getProvider():', provider);
         } catch (error) {
-          console.error('Error getting CAIP address:', error);
+          console.error('Error getting provider from appKit.getProvider():', error);
         }
       }
       
-      // Method 3: Try to get from state
-      if (!address && appKit.state && appKit.state.account && appKit.state.account.address) {
-        address = appKit.state.account.address;
-        console.log('Address from appKit.state:', address);
+      // If we don't have a provider from AppKit, try to use the universal provider
+      if (!provider && appKit.universalProvider) {
+        provider = appKit.universalProvider;
+        console.log('Using appKit.universalProvider:', provider);
+        
+        // Connect to the universal provider before making requests
+        try {
+          console.log('Connecting to universal provider...');
+          await provider.connect();
+          console.log('Connected to universal provider');
+        } catch (error) {
+          console.error('Error connecting to universal provider:', error);
+          // Continue anyway, as we might be able to use it without connecting
+        }
+      }
+      
+      // If we still don't have a provider, try window.ethereum
+      if (!provider && typeof window !== 'undefined' && window.ethereum) {
+        provider = window.ethereum;
+        console.log('Using window.ethereum as provider:', provider);
+      }
+      
+      if (!provider) {
+        console.error('Failed to get provider');
+        alert('Failed to get provider. Please try again.');
+        return;
+      }
+      
+      // Get the address
+      let address = null;
+      
+      // Try to get address from provider
+      try {
+        console.log('Requesting accounts from provider...');
+        
+        // Only make the request if we're not using the universal provider
+        // or if we've successfully connected to it
+        if (provider !== appKit.universalProvider || provider._state?.wcPairingExpirer) {
+          const accounts = await provider.request({ method: 'eth_requestAccounts' });
+          if (accounts && accounts.length > 0) {
+            address = accounts[0];
+            console.log('Address from provider.request:', address);
+          }
+        }
+      } catch (error) {
+        console.error('Error requesting accounts from provider:', error);
+      }
+      
+      // If we couldn't get address from provider, try AppKit methods
+      if (!address) {
+        // Method 1: Try getAddress
+        if (appKit.getAddress && typeof appKit.getAddress === 'function') {
+          try {
+            address = await appKit.getAddress();
+            console.log('Address from appKit.getAddress():', address);
+          } catch (error) {
+            console.error('Error getting address from appKit.getAddress():', error);
+          }
+        }
+        
+        // Method 2: Try getCaipAddress
+        if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
+          try {
+            const caipAddress = await appKit.getCaipAddress();
+            console.log('CAIP address:', caipAddress);
+            
+            // Extract the address part from the CAIP format (e.g., eip155:1:0x123... -> 0x123...)
+            if (caipAddress && typeof caipAddress === 'string') {
+              const parts = caipAddress.split(':');
+              if (parts.length === 3) {
+                address = parts[2];
+                console.log('Extracted address from CAIP:', address);
+              }
+            }
+          } catch (error) {
+            console.error('Error getting CAIP address:', error);
+          }
+        }
+        
+        // Method 3: Try to get from state
+        if (!address && appKit.state && appKit.state.account && appKit.state.account.address) {
+          address = appKit.state.account.address;
+          console.log('Address from appKit.state:', address);
+        }
       }
       
       if (!address) {
-        console.error('Failed to get address from AppKit');
+        console.error('Failed to get address');
         alert('Failed to get your wallet address. Please try again.');
         return;
       }
       
-      // Create a signer using the address and window.ethereum
-      if (typeof window !== 'undefined' && window.ethereum) {
-        try {
-          console.log('Creating signer with address:', address);
+      // Create a signer using the provider
+      console.log('Creating signer with address:', address);
+      
+      // Create a custom signer object that XMTP can use
+      // XMTP requires a signer with getAddress and signMessage methods
+      const signer = {
+        getAddress: async () => address,
+        signMessage: async (message: string) => {
+          if (!provider) throw new Error('Provider not available');
           
-          // Create a simple signer object that XMTP can use
-          signer = {
-            getAddress: async () => address,
-            signMessage: async (message: string) => {
-              if (!window.ethereum) throw new Error('Ethereum provider not available');
-              const eth = window.ethereum as any;
-              return eth.request({
-                method: 'personal_sign',
-                params: [message, address]
-              });
-            }
-          };
-          console.log('Created custom signer with address:', address);
-        } catch (error) {
-          console.error('Error creating signer:', error);
-        }
-      } else {
-        console.error('Window.ethereum is not available');
-      }
+          try {
+            // Use the provider to sign the message
+            console.log('Signing message with provider...');
+            console.log('Message to sign:', message);
+            console.log('Address used for signing:', address);
+            
+            const signature = await provider.request({
+              method: 'personal_sign',
+              params: [message, address]
+            });
+            
+            console.log('Message signed successfully:', signature);
+            return signature;
+          } catch (error) {
+            console.error('Error signing message:', error);
+            throw error;
+          }
+        },
+        // Add these methods for smart contract wallets
+        getChainId: () => BigInt(84532), // Base Sepolia testnet
+        getBlockNumber: () => BigInt(0) // Return BigInt(0) instead of undefined
+      };
+      
+      console.log('Created custom signer with address:', address);
       
       if (!signer) {
         console.error('Failed to create signer');
@@ -278,12 +389,123 @@ const HomePage: React.FC = () => {
             ) : (
               <div className="flex flex-col items-center justify-center h-full">
                 <p className="text-neutral-400 mb-4 text-center">{t('chat.connectXmtp')}</p>
-                <button 
-                  onClick={handleConnectWallet}
-                  className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-                >
-                  {t('common.connect')}
-                </button>
+                {appKit && typeof appKit.getAddress === 'function' ? (
+                  <div className="flex flex-col gap-3 items-center">
+                    <button 
+                      onClick={handleConnectWallet}
+                      className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      {t('common.connect')}
+                    </button>
+                    <button 
+                      onClick={async () => {
+                        try {
+                          // Check if we already have an address
+                          let address;
+                          try {
+                            address = await appKit.getAddress();
+                            console.log('Direct XMTP connect: Got address:', address);
+                          } catch (error) {
+                            console.error('Direct XMTP connect: Error getting address:', error);
+                            alert('Please connect your wallet first');
+                            return;
+                          }
+                          
+                          if (!address) {
+                            console.error('Direct XMTP connect: No address available');
+                            alert('Please connect your wallet first');
+                            return;
+                          }
+                          
+                          // Get provider
+                          let provider;
+                          try {
+                            provider = await appKit.getProvider();
+                            console.log('Direct XMTP connect: Got provider:', provider);
+                          } catch (error) {
+                            console.error('Direct XMTP connect: Error getting provider:', error);
+                          }
+                          
+                          if (!provider && appKit.universalProvider) {
+                            provider = appKit.universalProvider;
+                            console.log('Direct XMTP connect: Using universal provider:', provider);
+                            
+                            // Connect to the universal provider before making requests
+                            try {
+                              console.log('Connecting to universal provider...');
+                              await provider.connect();
+                              console.log('Connected to universal provider');
+                            } catch (error) {
+                              console.error('Error connecting to universal provider:', error);
+                              // Continue anyway, as we might be able to use it without connecting
+                            }
+                          }
+                          
+                          // Fallback to window.ethereum if no provider is available
+                          if (!provider && typeof window !== 'undefined' && window.ethereum) {
+                            provider = window.ethereum;
+                            console.log('Direct XMTP connect: Falling back to window.ethereum:', provider);
+                          }
+                          
+                          if (!provider) {
+                            console.error('Direct XMTP connect: No provider available');
+                            alert('Failed to get provider');
+                            return;
+                          }
+                          
+                          // Create signer
+                          const signer = {
+                            walletType: "SCW" as const,
+                            getAddress: async () => address,
+                            signMessage: async (message: string) => {
+                              try {
+                                console.log('Direct XMTP connect: Signing message:', message);
+                                console.log('Direct XMTP connect: Using address for signing:', address);
+                                
+                                // Try to sign with the provider
+                                const signature = await provider.request({
+                                  method: 'personal_sign',
+                                  params: [message, address]
+                                });
+                                
+                                console.log('Direct XMTP connect: Signature:', signature);
+                                return signature;
+                              } catch (error) {
+                                console.error('Direct XMTP connect: Error signing message:', error);
+                                throw error;
+                              }
+                            },
+                            getChainId: () => BigInt(84532), // Base Sepolia testnet
+                            getBlockNumber: () => BigInt(0) // Return BigInt(0) instead of undefined
+                          };
+                          
+                          // Connect to XMTP
+                          if (xmtp) {
+                            console.log('Direct XMTP connect: Connecting to XMTP...');
+                            await xmtp.connectXmtp(signer);
+                            console.log('Direct XMTP connect: Connected to XMTP');
+                          } else {
+                            console.error('Direct XMTP connect: XMTP context not available');
+                            alert('XMTP service is not available');
+                          }
+                        } catch (error) {
+                          console.error('Direct XMTP connect: Error:', error);
+                          alert('Error connecting to XMTP: ' + ((error as Error).message || 'Unknown error'));
+                        }
+                      }}
+                      className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                    >
+                      Connect to XMTP directly
+                    </button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={handleConnectWallet}
+                    className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                  >
+                    {t('common.connect')}
+                  </button>
+                )}
               </div>
             )}
           </div>

@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react';
+// Import directly from @xmtp/browser-sdk
 import { Client } from '@xmtp/browser-sdk';
 import { useAppKit } from './ReownContext';
-import { XmtpContextType, Conversation, ChatMessage } from '../types/chat';
+import { XmtpContextType, Conversation } from '../types/chat';
 
 // Create context
 const XmtpContext = createContext<XmtpContextType | null>(null);
@@ -25,69 +26,185 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const appKit = useAppKit();
+  const appKit = useAppKit(); // Using the appKit hook
 
-  // Check if we have a stored client
+  // Check if appKit is connected and try to connect to XMTP automatically
   useEffect(() => {
-    const loadClient = async () => {
+    const checkAppKitAndConnectXmtp = async () => {
+      if (!appKit) return;
+      
       try {
-        // Check if we have keys in local storage
-        const keys = localStorage.getItem('xmtp-keys');
-        if (keys) {
-          console.log('Found stored XMTP keys, attempting to restore client');
-          setIsConnecting(true);
+        // Check if user is already connected to AppKit
+        let address = null;
+        
+        // Try different methods to get the address
+        if (typeof appKit.getAddress === 'function') {
+          try {
+            address = await appKit.getAddress();
+            console.log('Auto-connect: Got address from appKit.getAddress():', address);
+          } catch (error) {
+            console.log('Auto-connect: Error getting address from appKit.getAddress():', error);
+          }
+        } 
+        
+        if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
+          try {
+            const caipAddress = await appKit.getCaipAddress();
+            console.log('Auto-connect: Got CAIP address:', caipAddress);
+            if (caipAddress && typeof caipAddress === 'string') {
+              const parts = caipAddress.split(':');
+              if (parts.length === 3) {
+                address = parts[2];
+                console.log('Auto-connect: Extracted address from CAIP:', address);
+              }
+            }
+          } catch (error) {
+            console.log('Auto-connect: Error getting CAIP address:', error);
+          }
+        }
+        
+        if (address && !isConnected && !isConnecting) {
+          console.log('User is connected to AppKit with address:', address);
+          console.log('Attempting to auto-connect to XMTP...');
           
-          // Create a client using stored keys
-          const client = await Client.create(null, {
-            env: 'production',
-            privateKeyOverride: keys
-          });
+          // Get provider
+          let provider = null;
+          if (typeof appKit.getProvider === 'function') {
+            try {
+              provider = await appKit.getProvider();
+              console.log('Auto-connect: Got provider from appKit.getProvider():', provider);
+            } catch (error) {
+              console.log('Auto-connect: Error getting provider from appKit.getProvider():', error);
+            }
+          } 
           
-          setClient(client);
-          setIsConnected(true);
-          console.log('XMTP client restored successfully');
+          if (!provider && appKit.universalProvider) {
+            provider = appKit.universalProvider;
+            console.log('Auto-connect: Using appKit.universalProvider:', provider);
+          }
           
-          // Load conversations
-          await loadConversations(client);
+          // Fallback to window.ethereum if no provider is available
+          if (!provider && typeof window !== 'undefined' && window.ethereum) {
+            provider = window.ethereum;
+            console.log('Auto-connect: Falling back to window.ethereum:', provider);
+          }
+          
+          if (provider) {
+            // Create a signer
+            const signer = createSigner(address, provider);
+            
+            // Try to connect to XMTP
+            try {
+              await connectXmtp(signer);
+            } catch (error) {
+              console.error('Auto-connect to XMTP failed:', error);
+            }
+          }
         }
       } catch (error) {
-        console.error('Failed to restore XMTP client:', error);
-        // Clear potentially corrupted keys
-        localStorage.removeItem('xmtp-keys');
-      } finally {
-        setIsConnecting(false);
+        console.error('Error checking AppKit connection:', error);
       }
     };
     
-    loadClient();
-  }, []);
+    checkAppKitAndConnectXmtp();
+  }, [appKit, isConnected, isConnecting]);
+
+
+
+  // Helper function to create a signer
+  const createSigner = (address: string, provider: any) => {
+    return {
+      walletType: "SCW" as const,
+      getAddress: async () => address,
+      signMessage: async (message: string) => {
+        if (!provider) throw new Error('Provider not available');
+        
+        try {
+          // Use the provider to sign the message
+          console.log('Signing message with provider...');
+          console.log('Message to sign:', message);
+          console.log('Address used for signing:', address);
+          
+          const signature = await provider.request({
+            method: 'personal_sign',
+            params: [message, address]
+          });
+          
+          console.log('Message signed successfully:', signature);
+          return signature;
+        } catch (error) {
+          console.error('Error signing message:', error);
+          throw error;
+        }
+      },
+      // Add these methods for smart contract wallets
+      getChainId: () => BigInt(84532), // Base Sepolia testnet
+      getBlockNumber: () => BigInt(0)
+    };
+  };
 
   // Connect to XMTP
   const connectXmtp = async (signer: any) => {
     try {
-      console.log('Connecting to XMTP...');
+      console.log("Starting XMTP connection process...");
       setIsConnecting(true);
       
-      if (!signer) {
-        console.error('No signer provided for XMTP connection');
-        throw new Error('No signer provided');
+      // Check if we already have a client
+      if (client) {
+        console.log("XMTP client already exists, using existing client");
+        setIsConnected(true);
+        setIsConnecting(false);
+        return;
+      }
+      
+      // Get the address from the signer for logging
+      let address;
+      try {
+        address = await signer.getAddress();
+        console.log('Signer address:', address);
+      } catch (error) {
+        console.error('Error getting address from signer:', error);
+        setIsConnecting(false);
+        throw new Error('Failed to get address from signer');
       }
       
       console.log('Creating XMTP client with signer');
-      const xmtpClient = await Client.create(signer, { env: 'production' });
-      console.log('XMTP client created:', !!xmtpClient);
+      console.log('XMTP Client object available:', !!Client);
+      console.log('XMTP Client.create method available:', !!(Client && typeof Client.create === 'function'));
       
-      // Save the keys for later restoration
-      const keys = await xmtpClient.exportKeyBundle();
-      localStorage.setItem('xmtp-keys', keys);
-      
-      setClient(xmtpClient);
-      setIsConnected(true);
-      
-      // Load conversations
-      await loadConversations(xmtpClient);
-      
-      return xmtpClient;
+      try {
+        console.log('Attempting to create XMTP client with production environment...');
+        
+        // Use Client.create directly with production environment
+        // @ts-ignore - Ignoring type errors for now to get it working
+        const xmtpClient = await Client.create(signer, { env: 'production' });
+        console.log('XMTP client created successfully:', !!xmtpClient);
+        
+        setClient(xmtpClient);
+        setIsConnected(true);
+        
+        // Load conversations
+        await loadConversations();
+      } catch (error) {
+        console.error('Error creating XMTP client with production environment:', error);
+        
+        // Try with dev environment as fallback
+        try {
+          console.log('Attempting to create XMTP client with dev environment...');
+          // @ts-ignore - Ignoring type errors for now to get it working
+          const xmtpClient = await Client.create(signer, { env: 'dev' });
+          console.log('XMTP client created successfully with dev environment:', !!xmtpClient);
+          
+          setClient(xmtpClient);
+          setIsConnected(true);
+          
+          // Load conversations
+          await loadConversations();
+        } catch (fallbackError) {
+          console.error('Error creating XMTP client with dev environment:', fallbackError);
+          throw fallbackError;
+        }
+      }
     } catch (error) {
       console.error('Error connecting to XMTP:', error);
       throw error;
@@ -98,53 +215,25 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
 
   // Disconnect from XMTP
   const disconnectXmtp = () => {
-    localStorage.removeItem('xmtp-keys');
     setClient(null);
     setConversations([]);
     setIsConnected(false);
   };
 
   // Load conversations
-  const loadConversations = async (clientToUse = client) => {
-    if (!clientToUse) {
-      console.warn('Cannot load conversations: No XMTP client');
-      return;
-    }
-    
+  const loadConversations = async () => {
     try {
-      console.log('Loading XMTP conversations...');
-      const convos = await clientToUse.conversations.list();
-      console.log(`Found ${convos.length} conversations`);
+      if (!client) {
+        console.warn("Cannot load conversations: XMTP client not available");
+        return;
+      }
       
-      // Convert to our app's conversation format
-      const formattedConversations: Conversation[] = await Promise.all(
-        convos.map(async (convo: any) => {
-          // Get messages for this conversation
-          const messages = await convo.messages();
-          
-          // Format messages
-          const formattedMessages: ChatMessage[] = messages.map((msg: any) => ({
-            id: msg.id,
-            sender: msg.senderAddress,
-            content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-            timestamp: new Date(msg.sent),
-            isBot: msg.senderAddress.toLowerCase() !== clientToUse.address.toLowerCase()
-          }));
-          
-          return {
-            id: convo.topic,
-            messages: formattedMessages,
-            topic: convo.context?.conversationId || 'New Conversation',
-            lastMessageTimestamp: formattedMessages.length > 0 
-              ? formattedMessages[formattedMessages.length - 1].timestamp 
-              : new Date()
-          };
-        })
-      );
-      
-      setConversations(formattedConversations);
+      console.log("Loading conversations...");
+      const convos = await client.conversations.list();
+      setConversations(convos);
+      console.log(`Loaded ${convos.length} conversations`);
     } catch (error) {
-      console.error('Error loading conversations:', error);
+      console.error("Error loading conversations:", error);
     }
   };
 
@@ -182,7 +271,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     connectXmtp,
     disconnectXmtp,
     sendMessage,
-    loadConversations: () => loadConversations()
+    loadConversations
   };
 
   return (
