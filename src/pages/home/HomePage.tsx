@@ -4,6 +4,8 @@ import { Link } from 'react-router-dom';
 import { useAllSongs } from '../../hooks/useSongs';
 import { MagnifyingGlass, ArrowRight } from '@phosphor-icons/react';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
+import { useAppKit } from '../../context/ReownContext';
+import { useXmtp } from '../../context/XmtpContext';
 
 // Mock chat messages for demonstration
 const MOCK_CHAT_MESSAGES = [
@@ -17,20 +19,159 @@ const HomePage: React.FC = () => {
   const { songs, loading, error } = useAllSongs();
   const [message, setMessage] = useState('');
   const [chatMessages, setChatMessages] = useState(MOCK_CHAT_MESSAGES);
-  const [isXmtpConnected, setIsXmtpConnected] = useState(false);
+  const appKit = useAppKit();
+  const xmtp = useXmtp();
   
-  // For demonstration purposes only - in reality we would connect to XMTP
+  // Check XMTP connection status
   useEffect(() => {
-    // Simulate XMTP connection check
-    const checkXmtpConnection = async () => {
-      // This would be an actual XMTP connection check in production
-      setTimeout(() => {
-        setIsXmtpConnected(false);
-      }, 1000);
-    };
-    
-    checkXmtpConnection();
-  }, []);
+    if (xmtp) {
+      console.log('XMTP connection status:', xmtp.isConnected);
+    }
+  }, [xmtp]);
+  
+  const handleConnectWallet = async () => {
+    try {
+      console.log('Connect wallet button clicked in HomePage');
+      
+      if (!appKit) {
+        console.warn('AppKit is not available yet in HomePage');
+        alert('Authentication is not available yet. Please try again later.');
+        return;
+      }
+      
+      // First, ensure the user is connected to Reown
+      let signer = null;
+      
+      // Check if user is already connected
+      const isConnected = appKit.getIsConnectedState && typeof appKit.getIsConnectedState === 'function' 
+        ? appKit.getIsConnectedState() 
+        : false;
+      
+      console.log('User is already connected:', isConnected);
+      
+      if (!isConnected) {
+        console.log('User not connected, opening Reown login');
+        // Open Reown login if not connected
+        if (typeof appKit.open === 'function') {
+          console.log('Using appKit.open() method in HomePage');
+          await appKit.open();
+          
+          // Wait for the login to complete
+          console.log('Waiting for login to complete...');
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } else if (appKit.auth && typeof appKit.auth.signIn === 'function') {
+          console.log('Using appKit.auth.signIn() method in HomePage');
+          await appKit.auth.signIn();
+          
+          // Wait for the login to complete
+          console.log('Waiting for login to complete...');
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        } else {
+          console.warn('AppKit methods not available in HomePage:', appKit);
+          alert('Authentication is not available yet. Please try again later.');
+          return;
+        }
+      }
+      
+      // Try to get the address from AppKit
+      let address = null;
+      
+      console.log('Attempting to get address from AppKit');
+      console.log('AppKit methods available:', Object.keys(appKit));
+      
+      // Method 1: Try getAddress
+      if (appKit.getAddress && typeof appKit.getAddress === 'function') {
+        try {
+          address = await appKit.getAddress();
+          console.log('Address from appKit.getAddress():', address);
+        } catch (error) {
+          console.error('Error getting address from appKit.getAddress():', error);
+        }
+      }
+      
+      // Method 2: Try getCaipAddress
+      if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
+        try {
+          const caipAddress = await appKit.getCaipAddress();
+          console.log('CAIP address:', caipAddress);
+          
+          // Extract the address part from the CAIP format (e.g., eip155:1:0x123... -> 0x123...)
+          if (caipAddress && typeof caipAddress === 'string') {
+            const parts = caipAddress.split(':');
+            if (parts.length === 3) {
+              address = parts[2];
+              console.log('Extracted address from CAIP:', address);
+            }
+          }
+        } catch (error) {
+          console.error('Error getting CAIP address:', error);
+        }
+      }
+      
+      // Method 3: Try to get from state
+      if (!address && appKit.state && appKit.state.account && appKit.state.account.address) {
+        address = appKit.state.account.address;
+        console.log('Address from appKit.state:', address);
+      }
+      
+      if (!address) {
+        console.error('Failed to get address from AppKit');
+        alert('Failed to get your wallet address. Please try again.');
+        return;
+      }
+      
+      // Create a signer using the address and window.ethereum
+      if (typeof window !== 'undefined' && window.ethereum) {
+        try {
+          console.log('Creating signer with address:', address);
+          
+          // Create a simple signer object that XMTP can use
+          signer = {
+            getAddress: async () => address,
+            signMessage: async (message: string) => {
+              if (!window.ethereum) throw new Error('Ethereum provider not available');
+              const eth = window.ethereum as any;
+              return eth.request({
+                method: 'personal_sign',
+                params: [message, address]
+              });
+            }
+          };
+          console.log('Created custom signer with address:', address);
+        } catch (error) {
+          console.error('Error creating signer:', error);
+        }
+      } else {
+        console.error('Window.ethereum is not available');
+      }
+      
+      if (!signer) {
+        console.error('Failed to create signer');
+        alert('Failed to create signer. Please make sure you have a wallet extension installed.');
+        return;
+      }
+      
+      console.log('Signer created, connecting to XMTP');
+      
+      // Now connect to XMTP with the signer
+      if (xmtp) {
+        try {
+          console.log('Connecting to XMTP with signer');
+          await xmtp.connectXmtp(signer);
+          console.log('XMTP connection successful');
+        } catch (error) {
+          console.error('Error connecting to XMTP:', error);
+          alert('Failed to connect to XMTP. Please try again.');
+        }
+      } else {
+        console.error('XMTP context not available');
+        alert('XMTP service is not available. Please try again later.');
+      }
+    } catch (error) {
+      console.error('Error during connect wallet in HomePage:', error);
+      alert('Error during connect wallet. Please try again later.');
+    }
+  };
   
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,7 +255,7 @@ const HomePage: React.FC = () => {
         
         <div className="bg-neutral-800 rounded-lg shadow-sm border border-neutral-700 flex-1 overflow-hidden flex flex-col">
           <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-64">
-            {isXmtpConnected ? (
+            {xmtp?.isConnected ? (
               chatMessages.map((msg) => (
                 <div 
                   key={msg.id} 
@@ -137,14 +278,17 @@ const HomePage: React.FC = () => {
             ) : (
               <div className="flex flex-col items-center justify-center h-full">
                 <p className="text-neutral-400 mb-4 text-center">{t('chat.connectXmtp')}</p>
-                <button className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium">
+                <button 
+                  onClick={handleConnectWallet}
+                  className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                >
                   {t('common.connect')}
                 </button>
               </div>
             )}
           </div>
           
-          {isXmtpConnected && (
+          {xmtp?.isConnected && (
             <form onSubmit={handleSendMessage} className="p-3 border-t border-neutral-700">
               <div className="flex items-center gap-2">
                 <input

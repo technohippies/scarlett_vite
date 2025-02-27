@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import './App.css';
 import MainLayout from './components/layout/MainLayout';
 import './lib/i18n';
+import XmtpProvider from './context/XmtpContext';
 
 // Lazy-loaded components
 const HomePage = lazy(() => import('./pages/home/HomePage'));
@@ -26,25 +27,38 @@ const Loader = () => {
   );
 };
 
-// Hidden Reown AppKit button for initialization
+// Hidden Reown AppKit initializer
 const ReownInitializer = () => {
   useEffect(() => {
-    // Check if the custom element is defined before trying to use it
-    if (customElements.get('appkit-button')) {
-      console.log('AppKit button element is defined');
-    } else {
-      console.warn('AppKit button element is not defined yet');
+    // Check if the custom element is defined
+    const isAppKitButtonDefined = typeof customElements !== 'undefined' && 
+      customElements.get('appkit-button');
+    
+    console.log('AppKit button element is defined:', isAppKitButtonDefined);
+    
+    // Monitor for when the element becomes available
+    if (!isAppKitButtonDefined) {
+      const checkInterval = setInterval(() => {
+        const isNowDefined = typeof customElements !== 'undefined' && 
+          customElements.get('appkit-button');
+        
+        if (isNowDefined) {
+          console.log('AppKit button element is now defined');
+          clearInterval(checkInterval);
+        }
+      }, 1000);
+      
+      // Clean up interval
+      return () => clearInterval(checkInterval);
     }
   }, []);
 
+  // Hidden element for initialization only
   return (
-    <>
-      {/* Only render if the custom element is defined */}
-      {typeof customElements !== 'undefined' && customElements.get('appkit-button') && (
-        // @ts-ignore - Web component
-        <appkit-button style={{ display: 'none' }} id="hidden-appkit-button" />
-      )}
-    </>
+    <div style={{ position: 'absolute', visibility: 'hidden', pointerEvents: 'none' }}>
+      {/* @ts-ignore - Web component */}
+      <appkit-button id="hidden-appkit-button" />
+    </div>
   );
 };
 
@@ -52,16 +66,18 @@ function App() {
   return (
     <Suspense fallback={<Loader />}>
       <Router>
-        <ReownInitializer />
-        <Routes>
-          <Route path="/" element={<MainLayout><HomePage /></MainLayout>} />
-          <Route path="/songs" element={<MainLayout><HomePage /></MainLayout>} />
-          <Route path="/song/:title" element={<MainLayout><SongPage /></MainLayout>} />
-          <Route path="/song/:title/play" element={<MainLayout><PlayPage /></MainLayout>} />
-          <Route path="/song/:title/study" element={<MainLayout><StudyPage /></MainLayout>} />
-          <Route path="/song/:title/complete" element={<MainLayout><CompletePage /></MainLayout>} />
-          <Route path="/chat" element={<MainLayout><ChatPage /></MainLayout>} />
-        </Routes>
+        <XmtpProvider>
+          <ReownInitializer />
+          <Routes>
+            <Route path="/" element={<MainLayout><HomePage /></MainLayout>} />
+            <Route path="/songs" element={<MainLayout><HomePage /></MainLayout>} />
+            <Route path="/song/:title" element={<MainLayout><SongPage /></MainLayout>} />
+            <Route path="/song/:title/play" element={<MainLayout><PlayPage /></MainLayout>} />
+            <Route path="/song/:title/study" element={<MainLayout><StudyPage /></MainLayout>} />
+            <Route path="/song/:title/complete" element={<MainLayout><CompletePage /></MainLayout>} />
+            <Route path="/chat" element={<MainLayout><ChatPage /></MainLayout>} />
+          </Routes>
+        </XmtpProvider>
       </Router>
     </Suspense>
   );

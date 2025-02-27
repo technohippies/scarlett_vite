@@ -6,9 +6,6 @@ import { wagmiAdapter, projectId, customBaseSepolia } from '../config/reown';
 // Set up queryClient
 const queryClient = new QueryClient();
 
-// Create a placeholder for appKit
-let appKit: any = null;
-
 // Create context for AppKit
 const AppKitContext = createContext<any>(null);
 
@@ -31,7 +28,7 @@ export const ReownProvider: React.FC<ReownProviderProps> = ({
   children, 
   cookies = null 
 }) => {
-  const [isAppKitReady, setIsAppKitReady] = useState(false);
+  const [appKit, setAppKit] = useState<any>(null);
   const initialState = cookies 
     ? cookieToInitialState(wagmiAdapter.wagmiConfig, cookies)
     : undefined;
@@ -40,6 +37,8 @@ export const ReownProvider: React.FC<ReownProviderProps> = ({
   useEffect(() => {
     const initializeAppKit = async () => {
       try {
+        console.log('Initializing Reown AppKit...');
+        
         // Dynamically import to avoid "process is not defined" error
         const { createAppKit } = await import('@reown/appkit/react');
         
@@ -52,7 +51,7 @@ export const ReownProvider: React.FC<ReownProviderProps> = ({
         };
         
         // Create the AppKit instance
-        appKit = createAppKit({
+        const appKitInstance = createAppKit({
           adapters: [wagmiAdapter],
           projectId: projectId || '',
           networks: [customBaseSepolia],
@@ -67,7 +66,10 @@ export const ReownProvider: React.FC<ReownProviderProps> = ({
           }
         });
         
-        setIsAppKitReady(true);
+        console.log('AppKit instance created:', !!appKitInstance);
+        console.log('AppKit methods:', Object.keys(appKitInstance));
+        
+        setAppKit(appKitInstance);
         console.log('Reown AppKit initialized successfully');
       } catch (error) {
         console.error('Failed to initialize Reown AppKit:', error);
