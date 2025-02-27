@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode, useEffect, useRef, useCallback } from 'react';
 // Import directly from @xmtp/browser-sdk
 import { Client } from '@xmtp/browser-sdk';
-import { useAppKit } from './ReownContext';
 import { XmtpContextType, Conversation } from '../types/chat';
 // Import Viem and Wagmi
 import { useSignMessage, useAccount, useWalletClient } from 'wagmi';
@@ -36,7 +35,6 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
-  const appKit = useAppKit(); // Using the appKit hook
   
   // Add a ref to track connection attempts
   const connectionAttemptedRef = useRef(false);
@@ -715,6 +713,39 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     }
   };
 
+  // Add a method to get or create a conversation with an address
+  const getOrCreateConversation = async (address: string) => {
+    if (!client) {
+      console.warn('Cannot get or create conversation: No XMTP client');
+      throw new Error('XMTP client not initialized');
+    }
+    
+    try {
+      console.log(`Getting or creating conversation with ${address}`);
+      
+      // Try to find existing conversation first
+      try {
+        const conversation = await client.conversations.find(address);
+        console.log('Found existing conversation');
+        return conversation;
+      } catch (error) {
+        // If not found, create a new conversation
+        console.log('Creating new conversation with:', address);
+        try {
+          const conversation = await client.conversations.newDm(address);
+          console.log('New conversation created successfully');
+          return conversation;
+        } catch (convError: any) {
+          console.error('Error creating new conversation:', convError);
+          throw new Error(`Failed to create conversation with ${address}: ${convError.message}`);
+        }
+      }
+    } catch (error) {
+      console.error('Error getting or creating conversation:', error);
+      throw error;
+    }
+  };
+
   // Context value
   const contextValue: XmtpContextType = {
     client,
@@ -728,7 +759,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     resetXmtpConnection,
     sendMessage,
     loadConversations,
-    canMessage
+    canMessage,
+    getOrCreateConversation
   };
 
   console.log('XmtpProvider rendering with context:', { 

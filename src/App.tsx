@@ -16,6 +16,7 @@ const ChatPage = lazy(() => import('./pages/chat/ChatPage'));
 // Loader component
 const Loader = () => {
   const { t } = useTranslation();
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-neutral-900 text-white">
       <div className="flex flex-col items-center">
@@ -61,19 +62,30 @@ const ReownInitializer = () => {
   );
 };
 
+// Updated MainLayout wrapper with flex layout
+const MainLayoutWrapper = ({ children }: { children: React.ReactNode }) => {
+  return (
+    <MainLayout>
+      <div className="flex-1 flex flex-col">
+        {children}
+      </div>
+    </MainLayout>
+  );
+};
+
 function App() {
   return (
     <Suspense fallback={<Loader />}>
       <Router>
         <ReownInitializer />
         <Routes>
-          <Route path="/" element={<MainLayout><HomePage /></MainLayout>} />
-          <Route path="/songs" element={<MainLayout><HomePage /></MainLayout>} />
-          <Route path="/song/:title" element={<MainLayout><SongPage /></MainLayout>} />
-          <Route path="/song/:title/play" element={<MainLayout><PlayPage /></MainLayout>} />
-          <Route path="/song/:title/study" element={<MainLayout><StudyPage /></MainLayout>} />
-          <Route path="/song/:title/complete" element={<MainLayout><CompletePage /></MainLayout>} />
-          <Route path="/chat" element={<MainLayout><ChatPage /></MainLayout>} />
+          <Route path="/" element={<MainLayoutWrapper><HomePage /></MainLayoutWrapper>} />
+          <Route path="/songs" element={<MainLayoutWrapper><HomePage /></MainLayoutWrapper>} />
+          <Route path="/song/:title" element={<MainLayoutWrapper><SongPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/play" element={<MainLayoutWrapper><PlayPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/study" element={<MainLayoutWrapper><StudyPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/complete" element={<MainLayoutWrapper><CompletePage /></MainLayoutWrapper>} />
+          <Route path="/chat" element={<MainLayoutWrapper><ChatPage /></MainLayoutWrapper>} />
         </Routes>
       </Router>
     </Suspense>

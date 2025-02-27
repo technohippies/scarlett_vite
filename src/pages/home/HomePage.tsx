@@ -1,356 +1,331 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { useAllSongs } from '../../hooks/useSongs';
 import { ArrowRight } from '@phosphor-icons/react';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
-import { useAppKit } from '../../context/ReownContext';
 import { useXmtp } from '../../context/XmtpContext';
-import XmtpConnectButton from '../../components/XmtpConnectButton';
-import { Client } from '@xmtp/browser-sdk';
 
-// Mock chat messages for demonstration
-const MOCK_CHAT_MESSAGES = [
-  { id: '1', content: 'Hello! How can I help you with your language learning today?', sender: 'bot', timestamp: new Date(Date.now() - 3600000) },
-  { id: '2', content: 'I want to learn some new vocabulary', sender: 'user', timestamp: new Date(Date.now() - 3500000) },
-  { id: '3', content: 'Great! I recommend starting with the song "Mini Skirt". It has a lot of useful everyday phrases.', sender: 'bot', timestamp: new Date(Date.now() - 3400000) },
-];
+// The bot address - consistent across the application
+const SCARLETT_BOT_ADDRESS = '0xc94A2d246026CedEE7d395B5B94C83aaCAd67773';
+// Number of messages to show initially
+const INITIAL_MESSAGE_COUNT = 3;
+
+// Simple date formatter function to prevent Invalid Date issues
+const formatMessageTime = (timestamp: Date) => {
+  if (!timestamp || isNaN(timestamp.getTime())) {
+    return 'Unknown time';
+  }
+  
+  const now = new Date();
+  const diffMs = now.getTime() - timestamp.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  
+  if (diffMins < 1) return 'Just now';
+  if (diffMins < 60) return `${diffMins} min ago`;
+  if (diffMins < 1440) {
+    const hours = Math.floor(diffMins / 60);
+    return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+  }
+  
+  const days = Math.floor(diffMins / 1440);
+  if (days < 7) {
+    return `${days} ${days === 1 ? 'day' : 'days'} ago`;
+  }
+  
+  // For older messages, show the actual date
+  return timestamp.toLocaleDateString();
+};
 
 const HomePage: React.FC = () => {
   const { t } = useTranslation();
   const { songs, loading, error } = useAllSongs();
   const [message, setMessage] = useState('');
-  const [chatMessages, setChatMessages] = useState(MOCK_CHAT_MESSAGES);
-  const appKit = useAppKit();
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
   const xmtp = useXmtp();
   const [sendStatus, setSendStatus] = useState<string | null>(null);
+  const [botConversation, setBotConversation] = useState<any>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   
-  // Check XMTP connection status
+  // Check XMTP connection status and load the bot conversation
   useEffect(() => {
-    if (xmtp) {
-      console.log('XMTP connection status:', xmtp.isConnected);
+    if (xmtp?.isConnected && xmtp.client) {
+      console.log('XMTP connected, loading bot conversation');
+      loadBotConversation();
     }
-  }, [xmtp]);
+  }, [xmtp?.isConnected]);
   
-  // Function to send a message to a specific address
-  const sendMessageToAddress = async () => {
+  // Scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
+  
+  // Function to get or create the bot conversation
+  const loadBotConversation = async () => {
+    if (!xmtp || !xmtp.client) {
+      console.log('XMTP not connected, cannot load bot conversation');
+      return;
+    }
+    
+    try {
+      setSendStatus('Loading conversation with Scarlett bot...');
+      
+      // Use the getOrCreateConversation method to ensure we always use the same conversation
+      const conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+      console.log('Got conversation with Scarlett bot:', conversation);
+      setBotConversation(conversation);
+      
+      // Load messages from this conversation
+      try {
+        const messages = await conversation.messages();
+        console.log(`Loaded ${messages.length} messages from conversation`);
+        
+        // Get our wallet address for comparison
+        const walletAddress = await xmtp.client.address;
+        console.log('Our wallet address:', walletAddress);
+        
+        // Map messages to our format with enhanced logging
+        const formattedMessages = messages.map((msg: any) => {
+          try {
+            // Log full message object for debugging
+            console.log('Processing message:', {
+              id: msg.id,
+              content: msg.content,
+              senderAddress: msg.senderAddress,
+              recipientAddress: msg.recipientAddress,
+              sent: msg.sent,
+              messageVersion: msg.messageVersion,
+              contentTopic: msg.contentTopic,
+              direction: msg.direction
+            });
+            
+            // In XMTP v3, we can use the direction property if available
+            // or check if we're the sender by comparing with our wallet address
+            let isFromBot = false;
+            
+            if (msg.direction === 'received') {
+              // If direction is 'received', it's from the bot
+              isFromBot = true;
+              console.log('Message is from bot (direction: received)');
+            } else if (msg.direction === 'sent') {
+              // If direction is 'sent', it's from us
+              isFromBot = false;
+              console.log('Message is from user (direction: sent)');
+            } else {
+              // If direction is not available, use content-based heuristics
+              const isErrorMessage = typeof msg.content === 'string' && 
+                msg.content.includes('Sorry, I encountered an error processing your message');
+              const isBotGreeting = typeof msg.content === 'string' && 
+                (msg.content.startsWith('I am Scarlett') || 
+                 msg.content.startsWith('Hey there') ||
+                 msg.content.includes('Bali'));
+              
+              // Determine if message is from bot based on content patterns
+              isFromBot = isErrorMessage || isBotGreeting;
+              
+              console.log('Message identification by content:', {
+                content: msg.content,
+                isErrorMessage,
+                isBotGreeting,
+                isFromBot
+              });
+            }
+            
+            const formattedMessage = {
+              id: msg.id || Date.now().toString(),
+              content: typeof msg.content === 'object' ? JSON.stringify(msg.content) : msg.content,
+              sender: isFromBot ? 'bot' : 'user',
+              timestamp: new Date(msg.sent || Date.now())
+            };
+            
+            console.log('Formatted message:', formattedMessage);
+            return formattedMessage;
+          } catch (msgError) {
+            console.error('Error formatting message:', msgError, msg);
+            // Return a fallback message object
+            return {
+              id: msg.id || Date.now().toString(),
+              content: typeof msg.content === 'string' ? msg.content : 'Error displaying message content',
+              sender: 'user', // Default to user if we can't determine
+              timestamp: new Date()
+            };
+          }
+        });
+        
+        // Only show the last INITIAL_MESSAGE_COUNT messages
+        setChatMessages(formattedMessages.slice(-INITIAL_MESSAGE_COUNT));
+        setSendStatus(null);
+      } catch (messagesError) {
+        console.error('Error loading messages:', messagesError);
+        setChatMessages([]);
+        setSendStatus('Connected to bot, but could not load previous messages');
+      }
+    } catch (error) {
+      console.error('Error loading bot conversation:', error);
+      setSendStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  
+  // Add a message listener to the conversation
+  useEffect(() => {
+    if (botConversation) {
+      console.log('Setting up message stream for bot conversation');
+      
+      let cleanup: (() => void) | null = null;
+      
+      // Create a stream of messages
+      try {
+        // Use the stream method instead of streamMessages
+        const stream = botConversation.stream((error: Error | null, message: any) => {
+          if (error) {
+            console.error('Error in message stream:', error);
+            return;
+          }
+          
+          if (!message) {
+            console.log('No message received from stream');
+            return;
+          }
+          
+          console.log('New message received:', {
+            id: message.id,
+            content: message.content,
+            senderAddress: message.senderAddress,
+            recipientAddress: message.recipientAddress,
+            sent: message.sent,
+            messageVersion: message.messageVersion,
+            contentTopic: message.contentTopic,
+            direction: message.direction
+          });
+          
+          // Only add the message if it's not already in the chat
+          setChatMessages(prev => {
+            const messageExists = prev.some(msg => msg.id === message.id);
+            
+            if (!messageExists) {
+              // In XMTP v3, we can use the direction property if available
+              let isFromBot = false;
+              
+              if (message.direction === 'received') {
+                // If direction is 'received', it's from the bot
+                isFromBot = true;
+                console.log('Stream message is from bot (direction: received)');
+              } else if (message.direction === 'sent') {
+                // If direction is 'sent', it's from us
+                isFromBot = false;
+                console.log('Stream message is from user (direction: sent)');
+              } else {
+                // If direction is not available, use content-based heuristics
+                const isErrorMessage = typeof message.content === 'string' && 
+                  message.content.includes('Sorry, I encountered an error processing your message');
+                const isBotGreeting = typeof message.content === 'string' && 
+                  (message.content.startsWith('I am Scarlett') || 
+                   message.content.startsWith('Hey there') ||
+                   message.content.includes('Bali'));
+                
+                // Determine if message is from bot based on content patterns
+                isFromBot = isErrorMessage || isBotGreeting;
+                
+                console.log('Stream message identification by content:', {
+                  content: message.content,
+                  isErrorMessage,
+                  isBotGreeting,
+                  isFromBot
+                });
+              }
+              
+              const formattedMessage = {
+                id: message.id || Date.now().toString(),
+                content: typeof message.content === 'object' ? JSON.stringify(message.content) : message.content,
+                sender: isFromBot ? 'bot' : 'user',
+                timestamp: new Date(message.sent || Date.now())
+              };
+              
+              console.log('Formatted message:', formattedMessage);
+              
+              // Keep only the last INITIAL_MESSAGE_COUNT messages plus the new one
+              const newMessages = [...prev, formattedMessage];
+              if (newMessages.length > INITIAL_MESSAGE_COUNT) {
+                return newMessages.slice(-INITIAL_MESSAGE_COUNT);
+              }
+              return newMessages;
+            }
+            
+            return prev;
+          });
+        });
+        
+        cleanup = () => {
+          console.log('Cleaning up message stream');
+          if (stream && typeof stream.unsubscribe === 'function') {
+            stream.unsubscribe();
+          }
+        };
+      } catch (error) {
+        console.error('Error creating message stream:', error);
+      }
+      
+      // Clean up function will be called when component unmounts or conversation changes
+      return () => {
+        if (cleanup) {
+          cleanup();
+        }
+      };
+    }
+  }, [botConversation]);
+  
+  // Function to send a message to the bot
+  const sendMessageToBot = async (messageContent: string) => {
     if (!xmtp || !xmtp.client) {
       setSendStatus('Please connect to XMTP first');
       return;
     }
     
-    // Use the bot address from the logs - this is running on the dev network
-    const botAddress = '0x3e506025BaEB9BAA8001218D37B329dC030576C9'; // Your bot address from the logs
-    const messageContent = 'Hello from Scarlett Tutor! This is a test message.';
+    if (!messageContent.trim()) {
+      return;
+    }
     
     try {
-      setSendStatus('Sending message to bot...');
-      console.log(`Sending message to ${botAddress}: ${messageContent}`);
+      setSendStatus('Sending message...');
       
-      // Use the direct conversation creation approach that worked
+      // Use the getOrCreateConversation method to ensure we always use the same conversation
       let conversation;
       try {
-        // Try to find existing conversation first
-        conversation = await xmtp.client.conversations.find(botAddress);
-        console.log('Found existing conversation with bot');
-      } catch (error) {
-        // If not found, create a new conversation
-        console.log('Creating new conversation with bot:', botAddress);
-        try {
-          conversation = await xmtp.client.conversations.newDm(botAddress);
-          console.log('New conversation created successfully');
-        } catch (error: any) {
-          console.error('Error creating conversation:', error);
-          setSendStatus(`Error creating conversation: ${error.message}`);
-          return;
-        }
+        conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+        setBotConversation(conversation);
+      } catch (error: any) {
+        console.error('Error getting or creating conversation:', error);
+        setSendStatus(`Error: ${error.message}`);
+        return;
       }
       
       if (conversation) {
-        // Send the message
-        await conversation.send(messageContent);
-        console.log('Message sent successfully!');
-        setSendStatus('Message sent successfully!');
-        
-        // Add the message to the local chat
+        // Add the message to the local chat immediately for better UX
         const newMessage = {
           id: Date.now().toString(),
           content: messageContent,
           sender: 'user',
           timestamp: new Date(),
+          isBot: false
         };
         
-        setChatMessages(prev => [...prev, newMessage]);
+        setChatMessages(prev => {
+          const newMessages = [...prev, newMessage];
+          // Keep only the last INITIAL_MESSAGE_COUNT messages plus the new one
+          if (newMessages.length > INITIAL_MESSAGE_COUNT) {
+            return newMessages.slice(-INITIAL_MESSAGE_COUNT);
+          }
+          return newMessages;
+        });
         
-        // Add a note about the message being sent
-        const botMessage = {
-          id: (Date.now() + 1).toString(),
-          content: `Message sent to your bot at ${botAddress}. Check your bot logs for the response!`,
-          sender: 'bot',
-          timestamp: new Date(),
-          isBot: true
-        };
-        
-        setChatMessages(prev => [...prev, botMessage]);
+        // Send the message
+        await conversation.send(messageContent);
+        console.log('Message sent successfully!');
+        setSendStatus(null);
       }
     } catch (error) {
       console.error('Error sending message:', error);
       setSendStatus(`Error sending message: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-  
-  const handleConnectWallet = async () => {
-    try {
-      console.log('Connect wallet button clicked in HomePage');
-      
-      if (!appKit) {
-        console.warn('AppKit is not available yet in HomePage');
-        alert('Authentication is not available yet. Please try again later.');
-        return;
-      }
-      
-      // First, ensure the user is connected to Reown
-      console.log('AppKit methods available:', Object.keys(appKit));
-      
-      // Open Reown login
-      if (typeof appKit.open === 'function') {
-        console.log('Using appKit.open() method in HomePage');
-        appKit.open();
-        
-        // Wait for the login to complete
-        console.log('Waiting for login to complete...');
-        
-        // Instead of using setTimeout, let's wait for the address to be available
-        let address = null;
-        let attempts = 0;
-        const maxAttempts = 10;
-        
-        while (!address && attempts < maxAttempts) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          attempts++;
-          
-          // Try to get address using different methods
-          if (typeof appKit.getAddress === 'function') {
-            try {
-              address = await appKit.getAddress();
-              if (address) {
-                console.log('Got address after login:', address);
-                break;
-              }
-            } catch (error) {
-              console.log('Still waiting for address...');
-            }
-          }
-          
-          if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
-            try {
-              const caipAddress = await appKit.getCaipAddress();
-              if (caipAddress && typeof caipAddress === 'string') {
-                const parts = caipAddress.split(':');
-                if (parts.length === 3) {
-                  address = parts[2];
-                  console.log('Got CAIP address after login:', caipAddress);
-                  console.log('Extracted address:', address);
-                  break;
-                }
-              }
-            } catch (error) {
-              console.log('Still waiting for CAIP address...');
-            }
-          }
-          
-          console.log(`Attempt ${attempts}/${maxAttempts} to get address...`);
-        }
-        
-        if (!address) {
-          console.warn('Failed to get address after waiting');
-          // Continue anyway, as the XMTP context might handle this automatically
-        }
-      } else if (appKit.auth && typeof appKit.auth.signIn === 'function') {
-        console.log('Using appKit.auth.signIn() method in HomePage');
-        appKit.auth.signIn();
-        
-        // Wait for the login to complete
-        console.log('Waiting for login to complete...');
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      } else {
-        console.warn('AppKit methods not available in HomePage:', appKit);
-        alert('Authentication is not available yet. Please try again later.');
-        return;
-      }
-      
-      // Check if XMTP is already connected
-      if (xmtp && xmtp.isConnected) {
-        console.log('Already connected to XMTP');
-        return;
-      }
-      
-      // Check if we have a provider after login
-      console.log('Checking for provider after login');
-      
-      // Get the provider from AppKit
-      let provider = null;
-      if (typeof appKit.getProvider === 'function') {
-        try {
-          provider = await appKit.getProvider();
-          console.log('Provider from appKit.getProvider():', provider);
-        } catch (error) {
-          console.error('Error getting provider from appKit.getProvider():', error);
-        }
-      }
-      
-      // If we don't have a provider from AppKit, try to use the universal provider
-      if (!provider && appKit.universalProvider) {
-        provider = appKit.universalProvider;
-        console.log('Using appKit.universalProvider:', provider);
-        
-        // Connect to the universal provider before making requests
-        try {
-          console.log('Connecting to universal provider...');
-          await provider.connect();
-          console.log('Connected to universal provider');
-        } catch (error) {
-          console.error('Error connecting to universal provider:', error);
-          // Continue anyway, as we might be able to use it without connecting
-        }
-      }
-      
-      // If we still don't have a provider, try window.ethereum
-      if (!provider && typeof window !== 'undefined' && window.ethereum) {
-        provider = window.ethereum;
-        console.log('Using window.ethereum as provider:', provider);
-      }
-      
-      if (!provider) {
-        console.error('Failed to get provider');
-        alert('Failed to get provider. Please try again.');
-        return;
-      }
-      
-      // Get the address
-      let address = null;
-      
-      // Try to get address from provider
-      try {
-        console.log('Requesting accounts from provider...');
-        
-        // Only make the request if we're not using the universal provider
-        // or if we've successfully connected to it
-        if (provider !== appKit.universalProvider || provider._state?.wcPairingExpirer) {
-          const accounts = await provider.request({ method: 'eth_requestAccounts' });
-          if (accounts && accounts.length > 0) {
-            address = accounts[0];
-            console.log('Address from provider.request:', address);
-          }
-        }
-      } catch (error) {
-        console.error('Error requesting accounts from provider:', error);
-      }
-      
-      // If we couldn't get address from provider, try AppKit methods
-      if (!address) {
-        // Method 1: Try getAddress
-        if (appKit.getAddress && typeof appKit.getAddress === 'function') {
-          try {
-            address = await appKit.getAddress();
-            console.log('Address from appKit.getAddress():', address);
-          } catch (error) {
-            console.error('Error getting address from appKit.getAddress():', error);
-          }
-        }
-        
-        // Method 2: Try getCaipAddress
-        if (!address && appKit.getCaipAddress && typeof appKit.getCaipAddress === 'function') {
-          try {
-            const caipAddress = await appKit.getCaipAddress();
-            console.log('CAIP address:', caipAddress);
-            
-            // Extract the address part from the CAIP format (e.g., eip155:1:0x123... -> 0x123...)
-            if (caipAddress && typeof caipAddress === 'string') {
-              const parts = caipAddress.split(':');
-              if (parts.length === 3) {
-                address = parts[2];
-                console.log('Extracted address from CAIP:', address);
-              }
-            }
-          } catch (error) {
-            console.error('Error getting CAIP address:', error);
-          }
-        }
-        
-        // Method 3: Try to get from state
-        if (!address && appKit.state && appKit.state.account && appKit.state.account.address) {
-          address = appKit.state.account.address;
-          console.log('Address from appKit.state:', address);
-        }
-      }
-      
-      if (!address) {
-        console.error('Failed to get address');
-        alert('Failed to get your wallet address. Please try again.');
-        return;
-      }
-      
-      // Create a signer using the provider
-      console.log('Creating signer with address:', address);
-      
-      // Create a custom signer object that XMTP can use
-      // XMTP requires a signer with getAddress and signMessage methods
-      const signer = {
-        getAddress: async () => address,
-        signMessage: async (message: string) => {
-          if (!provider) throw new Error('Provider not available');
-          
-          try {
-            // Use the provider to sign the message
-            console.log('Signing message with provider...');
-            console.log('Message to sign:', message);
-            console.log('Address used for signing:', address);
-            
-            const signature = await provider.request({
-              method: 'personal_sign',
-              params: [message, address]
-            });
-            
-            console.log('Message signed successfully:', signature);
-            return signature;
-          } catch (error) {
-            console.error('Error signing message:', error);
-            throw error;
-          }
-        },
-        // Add these methods for smart contract wallets
-        getChainId: () => BigInt(84532), // Base Sepolia testnet
-        getBlockNumber: () => BigInt(0) // Return BigInt(0) instead of undefined
-      };
-      
-      console.log('Created custom signer with address:', address);
-      
-      if (!signer) {
-        console.error('Failed to create signer');
-        alert('Failed to create signer. Please make sure you have a wallet extension installed.');
-        return;
-      }
-      
-      console.log('Signer created, connecting to XMTP');
-      
-      // Now connect to XMTP with the signer
-      if (xmtp) {
-        try {
-          console.log('Connecting to XMTP with signer');
-          await xmtp.connectXmtp(signer);
-          console.log('XMTP connection successful');
-        } catch (error) {
-          console.error('Error connecting to XMTP:', error);
-          alert('Failed to connect to XMTP. Please try again.');
-        }
-      } else {
-        console.error('XMTP context not available');
-        alert('XMTP service is not available. Please try again later.');
-      }
-    } catch (error) {
-      console.error('Error during connect wallet in HomePage:', error);
-      alert('Error during connect wallet. Please try again later.');
     }
   };
   
@@ -359,131 +334,17 @@ const HomePage: React.FC = () => {
     
     if (!message.trim()) return;
     
-    // Add user message
-    const userMessage = {
-      id: Date.now().toString(),
-      content: message,
-      sender: 'user',
-      timestamp: new Date(),
-    };
+    // Send the message to the bot
+    sendMessageToBot(message);
     
-    setChatMessages([...chatMessages, userMessage]);
+    // Clear the input
     setMessage('');
-    
-    // Simulate bot response
-    setTimeout(() => {
-      const botMessage = {
-        id: (Date.now() + 1).toString(),
-        content: "I'm still learning how to respond properly. Tell me more about what you'd like to learn!",
-        sender: 'bot',
-        timestamp: new Date(),
-      };
-      
-      setChatMessages(prev => [...prev, botMessage]);
-    }, 1000);
-  };
-  
-  const checkBotAddress = async () => {
-    if (!xmtp) {
-      setSendStatus('Please connect to XMTP first');
-      return;
-    }
-    
-    const botAddress = '0x3e506025BaEB9BAA8001218D37B329dC030576C9';
-    
-    try {
-      setSendStatus('Checking if bot address can be messaged...');
-      
-      // Use our improved canMessage method
-      const canMessageMap = await xmtp.canMessage([botAddress]);
-      const canMessage = canMessageMap.get(botAddress);
-      
-      // Also check if we can find an existing conversation
-      let hasExistingConversation = false;
-      try {
-        if (xmtp.client) {
-          await xmtp.client.conversations.find(botAddress);
-          hasExistingConversation = true;
-        }
-      } catch (error) {
-        hasExistingConversation = false;
-      }
-      
-      setSendStatus(`Bot diagnostics:
-        - Can message: ${canMessage ? 'YES' : 'NO'}
-        - Has existing conversation: ${hasExistingConversation ? 'YES' : 'NO'}
-        - Bot address: ${botAddress}
-        - Environment: dev
-      `);
-      
-      console.log('Bot diagnostics:', {
-        canMessage,
-        hasExistingConversation,
-        botAddress,
-        environment: 'dev'
-      });
-    } catch (error) {
-      console.error('Error checking bot address:', error);
-      setSendStatus(`Error checking bot address: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  };
-  
-  const forceCreateConversation = async () => {
-    if (!xmtp || !xmtp.client) {
-      setSendStatus('Please connect to XMTP first');
-      return;
-    }
-    
-    const botAddress = '0x3e506025BaEB9BAA8001218D37B329dC030576C9';
-    
-    try {
-      setSendStatus('Forcing conversation creation with bot...');
-      
-      // Try to directly create a conversation without checking canMessage
-      let conversation;
-      try {
-        // Try to find existing conversation first
-        conversation = await xmtp.client.conversations.find(botAddress);
-        setSendStatus('Found existing conversation with bot!');
-      } catch (error) {
-        // If not found, create a new conversation
-        console.log('Creating new conversation with bot:', botAddress);
-        try {
-          conversation = await xmtp.client.conversations.newDm(botAddress);
-          setSendStatus('Successfully created new conversation with bot!');
-        } catch (error: any) {
-          console.error('Error creating conversation:', error);
-          setSendStatus(`Error creating conversation: ${error.message}`);
-          return;
-        }
-      }
-      
-      if (conversation) {
-        // Try to send a test message
-        const testMessage = 'Hello bot, this is a test message from force create!';
-        await conversation.send(testMessage);
-        setSendStatus('Successfully sent test message to bot!');
-        
-        // Add the message to the local chat
-        const newMessage = {
-          id: Date.now().toString(),
-          content: testMessage,
-          sender: 'user',
-          timestamp: new Date(),
-        };
-        
-        setChatMessages(prev => [...prev, newMessage]);
-      }
-    } catch (error) {
-      console.error('Error in force create conversation:', error);
-      setSendStatus(`Error in force create: ${error instanceof Error ? error.message : String(error)}`);
-    }
   };
   
   return (
-    <div className="container mx-auto px-4 py-6">
+    <div className="flex-1 flex flex-col md:container md:mx-auto md:max-w-6xl">
       {/* Songs Section */}
-      <section className="mb-6">
+      <div className="flex-shrink-0 p-4">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-bold">{t('home.popularSongs')}</h2>
           <Link to="/songs" className="text-indigo-400 text-sm flex items-center">
@@ -500,7 +361,7 @@ const HomePage: React.FC = () => {
             {t('common.error')}
           </div>
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             {songs.slice(0, 3).map((song) => (
               <Link 
                 key={song.id} 
@@ -520,133 +381,69 @@ const HomePage: React.FC = () => {
             ))}
           </div>
         )}
-      </section>
+      </div>
       
       {/* Chat Section */}
-      <section className="flex-1 flex flex-col">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">{t('home.recentChats')}</h2>
+      <div className="flex-1 flex flex-col bg-neutral-800 border-t border-neutral-700">
+        <div className="flex-shrink-0 p-3 border-b border-neutral-700 flex justify-between items-center">
+          <h2 className="text-xl font-bold">Scarlett Bot Chat</h2>
           <Link to="/chat" className="text-indigo-400 text-sm flex items-center">
-            {t('home.viewAllChats')} <ArrowRight size={16} weight="bold" className="ml-1" />
+            View Full Chat <ArrowRight size={16} weight="bold" className="ml-1" />
           </Link>
         </div>
         
-        <div className="bg-neutral-800 rounded-lg shadow-sm border border-neutral-700 flex-1 overflow-hidden flex flex-col">
-          <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-64">
-            {xmtp?.isConnected ? (
-              <>
-                {chatMessages.map((msg) => (
-                  <div 
-                    key={msg.id} 
-                    className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}
-                  >
-                    <div 
-                      className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                        msg.sender === 'user' 
-                          ? 'bg-indigo-600 text-white' 
-                          : 'bg-neutral-700 text-white'
-                      }`}
-                    >
-                      <p className="text-sm">{msg.content}</p>
-                      <p className="text-xs opacity-70 mt-1">
-                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-                
-                <div className="mt-4 flex flex-col gap-2">
-                  {!xmtp?.isConnected ? (
-                    <button 
-                      onClick={handleConnectWallet}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded"
-                    >
-                      Connect to XMTP
-                    </button>
-                  ) : (
-                    <>
-                      <button 
-                        onClick={sendMessageToAddress}
-                        className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded"
-                      >
-                        Send Message to Scarlett Bot
-                      </button>
-                      <p className="text-sm text-gray-600 mt-1">
-                        This will send a test message to your Scarlett bot running on the dev network.
-                      </p>
-                      
-                      <button 
-                        onClick={checkBotAddress}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded mt-2"
-                      >
-                        Check Bot Address
-                      </button>
-                      <p className="text-sm text-gray-600 mt-1">
-                        Check if the bot address can be messaged on the XMTP network.
-                      </p>
-                      
-                      <button 
-                        onClick={forceCreateConversation}
-                        className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded mt-2"
-                      >
-                        Force Create Conversation
-                      </button>
-                      <p className="text-sm text-gray-600 mt-1">
-                        Bypass canMessage check and directly try to create a conversation with the bot.
-                      </p>
-                    </>
-                  )}
-                  {sendStatus && (
-                    <p className={`mt-2 ${sendStatus.includes('Error') ? 'text-red-500' : 'text-green-500'} whitespace-pre-line`}>
-                      {sendStatus}
-                    </p>
-                  )}
-                </div>
-              </>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-full">
-                <p className="text-neutral-400 mb-4 text-center">{t('chat.connectXmtp')}</p>
-                {appKit && typeof appKit.getAddress === 'function' ? (
-                  <div className="flex flex-col gap-3 items-center">
-                    <XmtpConnectButton />
-                    <p className="text-xs text-neutral-500 text-center max-w-xs">
-                      {t('chat.xmtpExplanation')}
-                    </p>
-                  </div>
-                ) : (
-                  <button 
-                    onClick={handleConnectWallet}
-                    className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-                  >
-                    {t('common.connectWallet')}
-                  </button>
-                )}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {chatMessages.map(msg => (
+            <div 
+              key={msg.id} 
+              className={`flex ${msg.sender === 'bot' ? 'justify-start' : 'justify-end'}`}
+            >
+              <div 
+                className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                  msg.sender === 'bot' 
+                    ? 'bg-neutral-700 text-white' 
+                    : 'bg-indigo-600 text-white'
+                }`}
+              >
+                <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                <p className="text-xs opacity-70 mt-1">
+                  {formatMessageTime(msg.timestamp)}
+                </p>
               </div>
-            )}
-          </div>
-          
-          {xmtp?.isConnected && (
-            <form onSubmit={handleSendMessage} className="p-3 border-t border-neutral-700">
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  placeholder={t('chat.placeholder')}
-                  className="flex-1 bg-neutral-700 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-white placeholder-neutral-400"
-                />
-                <button 
-                  type="submit"
-                  className="bg-indigo-600 text-white rounded-full p-2"
-                  disabled={!message.trim()}
-                >
-                  <ArrowRight size={20} weight="bold" />
-                </button>
-              </div>
-            </form>
+            </div>
+          ))}
+
+          {sendStatus && (
+            <div className={`p-2 rounded ${sendStatus.includes('Error') ? 'bg-red-900/20 text-red-400' : 'bg-blue-900/20 text-blue-400'}`}>
+              {sendStatus}
+            </div>
           )}
         </div>
-      </section>
+        
+        {/* Chat input */}
+        <div className="border-t border-neutral-700 bg-neutral-800">
+          <form onSubmit={handleSendMessage} className="p-3">
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="Type a message..."
+                className="flex-1 bg-neutral-700 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-white placeholder-neutral-400"
+              />
+              <button
+                type="submit"
+                className="bg-indigo-600 text-white rounded-full p-2"
+                disabled={!xmtp?.isConnected}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" viewBox="0 0 256 256">
+                  <path d="M233.86,110.48,65.8,14.58A20,20,0,0,0,37.15,38.64L67.33,128,37.15,217.36A20,20,0,0,0,56,244a20.1,20.1,0,0,0,9.81-2.58l.09-.06,168-96.07a20,20,0,0,0,0-34.81ZM63.19,215.26,88.61,140H144a12,12,0,0,0,0-24H88.61L63.18,40.72l152.76,87.17Z" />
+                </svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
   );
 };

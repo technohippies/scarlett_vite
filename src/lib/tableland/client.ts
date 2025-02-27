@@ -78,5 +78,7 @@ export async function getSongByTitle(title: string): Promise<Song | null> {
  * Helper function to convert an IPFS CID to a URL
  */
 export function ipfsCidToUrl(cid: string): string {
-  return `https://premium.aiozpin.network/ipfs/${cid}`;
+  if (!cid) return '';
+  // Use local proxy instead of direct IPFS gateway
+  return `/ipfs/${cid}`;
 } 

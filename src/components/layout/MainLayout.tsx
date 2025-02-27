@@ -201,7 +201,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
       </header>
       
       {/* Main content */}
-      <main className="flex-1">
+      <main className="flex-1 flex flex-col relative">
         {children}
       </main>
     </div>

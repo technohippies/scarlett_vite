@@ -49,12 +49,21 @@ export default defineConfig({
   },
   server: {
     headers: {
-      'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
       'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Resource-Policy': 'cross-origin',
     },
     fs: {
       // Allow serving files from node_modules
       allow: ['..']
+    },
+    proxy: {
+      '/ipfs': {
+        target: 'https://premium.aiozpin.network',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path
+      }
     }
   },
   worker: {

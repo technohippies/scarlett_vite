@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { MagnifyingGlass, PaperPlaneRight, Plus } from '@phosphor-icons/react';
+import { MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
+import ChatInput from '../../components/chat/ChatInput';
 
 // Mock conversation data for demonstration
 const MOCK_CONVERSATIONS = [
@@ -34,8 +35,8 @@ const ChatPage: React.FC = () => {
   const appKit = useAppKit();
   const [conversations, setConversations] = useState(MOCK_CONVERSATIONS);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
-  const [message, setMessage] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   
   // Use XMTP conversations if available
   useEffect(() => {
@@ -158,15 +159,13 @@ const ChatPage: React.FC = () => {
     }
   };
   
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!message.trim() || !activeConversationId) return;
+  const handleSendMessage = async (messageContent: string) => {
+    if (!messageContent.trim() || !activeConversationId) return;
     
     // Add user message to UI immediately for better UX
     const userMessage = {
       id: Date.now().toString(),
-      content: message,
+      content: messageContent,
       sender: 'user',
       timestamp: new Date(),
       isBot: false
@@ -184,19 +183,19 @@ const ChatPage: React.FC = () => {
       )
     );
     
-    const messageContent = message;
-    setMessage('');
-    
     // Send message via XMTP if connected
     if (xmtp?.isConnected) {
       try {
+        setStatusMessage('Sending message...');
         console.log('Sending message via XMTP:', messageContent);
         await xmtp.sendMessage(activeConversationId, messageContent);
         console.log('Message sent successfully via XMTP');
+        setStatusMessage(null);
         
         // XMTP will handle the conversation update through the context
       } catch (error) {
         console.error('Error sending message via XMTP:', error);
+        setStatusMessage(`Error sending message: ${error instanceof Error ? error.message : String(error)}`);
         
         // Fallback to mock response if XMTP fails
         setTimeout(() => {
@@ -219,6 +218,7 @@ const ChatPage: React.FC = () => {
                 : conv
             )
           );
+          setStatusMessage(null);
         }, 1000);
       }
     } else {
@@ -287,127 +287,119 @@ const ChatPage: React.FC = () => {
   }
   
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)]">
-      <div className="flex h-full">
-        {/* Conversations sidebar */}
-        <div className="w-1/3 border-r border-neutral-700 flex flex-col bg-neutral-800">
-          <div className="p-3 border-b border-neutral-700">
-            <div className="relative">
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t('chat.searchConversations')}
-                className="w-full bg-neutral-700 rounded-full px-4 py-2 pl-10 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-white placeholder-neutral-400"
-              />
-              <MagnifyingGlass size={16} className="absolute left-3 top-2.5 text-neutral-400" />
-            </div>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto">
-            {filteredConversations.length > 0 ? (
-              filteredConversations.map(conv => (
-                <button
-                  key={conv.id}
-                  className={`w-full text-left p-3 border-b border-neutral-700 hover:bg-neutral-700 ${
-                    activeConversationId === conv.id ? 'bg-neutral-700' : ''
-                  }`}
-                  onClick={() => setActiveConversationId(conv.id)}
-                >
-                  <h3 className="font-medium truncate">{conv.topic}</h3>
-                  <p className="text-sm text-neutral-400 truncate">
-                    {conv.messages[conv.messages.length - 1]?.content}
-                  </p>
-                  <p className="text-xs text-neutral-500 mt-1">
-                    {conv.lastMessageTimestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
-                </button>
-              ))
-            ) : (
-              <div className="p-4 text-center text-neutral-400">
-                {t('chat.noConversationsFound')}
-              </div>
-            )}
-          </div>
-          
-          <div className="p-3 border-t border-neutral-700">
-            <button
-              onClick={startNewConversation}
-              className="w-full bg-indigo-600 text-white rounded-lg py-2 flex items-center justify-center gap-2"
-            >
-              <Plus size={16} weight="bold" />
-              {t('chat.newConversation')}
-            </button>
+    <div className="flex-1 flex md:container md:mx-auto md:max-w-6xl">
+      {/* Conversations sidebar */}
+      <div className="w-80 border-r border-neutral-700 flex flex-col bg-neutral-800">
+        <div className="p-3 border-b border-neutral-700">
+          <div className="relative">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t('chat.searchConversations')}
+              className="w-full bg-neutral-700 rounded-full px-4 py-2 pl-10 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-white placeholder-neutral-400"
+            />
+            <MagnifyingGlass size={16} className="absolute left-3 top-2.5 text-neutral-400" />
           </div>
         </div>
         
-        {/* Chat area */}
-        <div className="flex-1 flex flex-col bg-neutral-900">
-          {activeConversation ? (
-            <>
-              {/* Chat header */}
-              <div className="p-3 border-b border-neutral-700">
-                <h2 className="font-medium">{activeConversation.topic}</h2>
-              </div>
-              
-              {/* Messages */}
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {activeConversation.messages.map(msg => (
-                  <div 
-                    key={msg.id} 
-                    className={`flex ${msg.isBot ? 'justify-start' : 'justify-end'}`}
-                  >
-                    <div 
-                      className={`max-w-[80%] rounded-lg px-3 py-2 ${
-                        msg.isBot 
-                          ? 'bg-neutral-800 text-white' 
-                          : 'bg-indigo-600 text-white'
-                      }`}
-                    >
-                      <p className="text-sm">{msg.content}</p>
-                      <p className="text-xs opacity-70 mt-1">
-                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Message input */}
-              <form onSubmit={handleSendMessage} className="p-3 border-t border-neutral-700">
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    value={message}
-                    onChange={(e) => setMessage(e.target.value)}
-                    placeholder={t('chat.placeholder')}
-                    className="flex-1 bg-neutral-800 rounded-full px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-white placeholder-neutral-400"
-                  />
-                  <button 
-                    type="submit"
-                    className="bg-indigo-600 text-white rounded-full p-2"
-                    disabled={!message.trim()}
-                  >
-                    <PaperPlaneRight size={20} weight="bold" />
-                  </button>
-                </div>
-              </form>
-            </>
+        <div className="flex-1 overflow-y-auto">
+          {filteredConversations.length > 0 ? (
+            filteredConversations.map(conv => (
+              <button
+                key={conv.id}
+                className={`w-full text-left p-3 border-b border-neutral-700 hover:bg-neutral-700 ${
+                  activeConversationId === conv.id ? 'bg-neutral-700' : ''
+                }`}
+                onClick={() => setActiveConversationId(conv.id)}
+              >
+                <h3 className="font-medium truncate">{conv.topic}</h3>
+                <p className="text-sm text-neutral-400 truncate">
+                  {conv.messages[conv.messages.length - 1]?.content}
+                </p>
+                <p className="text-xs text-neutral-500 mt-1">
+                  {conv.lastMessageTimestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              </button>
+            ))
           ) : (
-            <div className="flex-1 flex items-center justify-center">
-              <div className="text-center">
-                <p className="text-neutral-400 mb-4">{t('chat.selectConversation')}</p>
-                <button
-                  onClick={startNewConversation}
-                  className="bg-indigo-600 text-white rounded-lg py-2 px-4 flex items-center justify-center gap-2 mx-auto"
-                >
-                  <Plus size={16} weight="bold" />
-                  {t('chat.newConversation')}
-                </button>
-              </div>
+            <div className="p-4 text-center text-neutral-400">
+              {t('chat.noConversationsFound')}
             </div>
           )}
         </div>
+        
+        <div className="p-3 border-t border-neutral-700">
+          <button
+            onClick={startNewConversation}
+            className="w-full bg-indigo-600 text-white rounded-lg py-2 flex items-center justify-center gap-2"
+          >
+            <Plus size={16} weight="bold" />
+            {t('chat.newConversation')}
+          </button>
+        </div>
+      </div>
+      
+      {/* Chat area */}
+      <div className="flex-1 flex flex-col bg-neutral-900">
+        {activeConversation ? (
+          <>
+            {/* Chat header */}
+            <div className="p-3 border-b border-neutral-700">
+              <h2 className="font-medium">{activeConversation.topic}</h2>
+            </div>
+            
+            {/* Messages container */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {activeConversation.messages.map(msg => (
+                <div 
+                  key={msg.id} 
+                  className={`flex ${msg.sender === 'bot' ? 'justify-start' : 'justify-end'}`}
+                >
+                  <div 
+                    className={`max-w-[80%] rounded-lg px-3 py-2 ${
+                      msg.sender === 'bot' 
+                        ? 'bg-neutral-700 text-white' 
+                        : 'bg-indigo-600 text-white'
+                    }`}
+                  >
+                    <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+                    <p className="text-xs opacity-70 mt-1">
+                      {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              ))}
+
+              {statusMessage && (
+                <div className={`p-2 rounded ${statusMessage.includes('Error') ? 'bg-red-900/20 text-red-400' : 'bg-blue-900/20 text-blue-400'}`}>
+                  {statusMessage}
+                </div>
+              )}
+            </div>
+            
+            {/* Chat input */}
+            <div className="border-t border-neutral-700 bg-neutral-800">
+              <ChatInput 
+                onSendMessage={handleSendMessage} 
+                placeholder={t('chat.placeholder')}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <p className="text-neutral-400 mb-4">{t('chat.selectConversation')}</p>
+              <button
+                onClick={startNewConversation}
+                className="bg-indigo-600 text-white rounded-lg py-2 px-4 flex items-center justify-center gap-2 mx-auto"
+              >
+                <Plus size={16} weight="bold" />
+                {t('chat.newConversation')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

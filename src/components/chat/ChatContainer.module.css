@@ -1,0 +1,51 @@
+.chatContainer {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #333;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background-color: #262626;
+  height: 40vh;
+}
+
+.fullHeight {
+  height: 100%;
+}
+
+.messagesContainer {
+  flex: 1;
+  overflow-hidden;
+  position: relative;
+}
+
+.messagesScroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding-bottom: 4rem;
+}
+
+.fixedInputContainer {
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  border-top: 1px solid #333;
+  background-color: #262626;
+}
+
+@media (max-width: 640px) {
+  .chatContainer {
+    height: 50vh;
+  }
+}
+
+@media (max-width: 480px) {
+  .chatContainer {
+    height: 60vh;
+  }
+} 
