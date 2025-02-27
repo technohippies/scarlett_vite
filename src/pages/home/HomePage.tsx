@@ -5,9 +5,8 @@ import { useAllSongs } from '../../hooks/useSongs';
 import { ArrowRight } from '@phosphor-icons/react';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
 import { useXmtp } from '../../context/XmtpContext';
+import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
 
-// The bot address - consistent across the application
-const SCARLETT_BOT_ADDRESS = '0xc94A2d246026CedEE7d395B5B94C83aaCAd67773';
 // Number of messages to show initially
 const INITIAL_MESSAGE_COUNT = 3;
 
@@ -166,24 +165,46 @@ const HomePage: React.FC = () => {
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [botConversation, setBotConversation] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [connectionAttempted, setConnectionAttempted] = useState(false);
   
   // Check XMTP connection status and load the bot conversation
   useEffect(() => {
     if (xmtp?.isConnected && xmtp.client) {
       console.log('XMTP connected, loading bot conversation');
       loadBotConversation();
+    } else if (xmtp?.connectionError && !connectionAttempted) {
+      // Add a bot message about the connection error
+      const errorMessage = `I'm having trouble connecting to the messaging service. Error: ${xmtp.connectionError.message}`;
+      addBotMessage(errorMessage, true);
+      setConnectionAttempted(true);
     }
-  }, [xmtp?.isConnected]);
+  }, [xmtp?.isConnected, xmtp?.connectionError]);
   
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
   
+  // Add a bot message to the chat
+  const addBotMessage = (content: string, isErrorMessage = false) => {
+    const newMessage = {
+      id: `bot-${Date.now()}`,
+      sender: 'Scarlett',
+      content: content,
+      timestamp: new Date(),
+      isBot: true,
+      isErrorMessage
+    };
+    
+    setChatMessages(prev => [...prev, newMessage]);
+    return newMessage;
+  };
+  
   // Function to get or create the bot conversation
   const loadBotConversation = async () => {
     if (!xmtp || !xmtp.client) {
       console.log('XMTP not connected, cannot load bot conversation');
+      addBotMessage('Please connect to the messaging service to chat with me.', true);
       return;
     }
     

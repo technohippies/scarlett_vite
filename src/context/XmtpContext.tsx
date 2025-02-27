@@ -6,6 +6,8 @@ import { XmtpContextType, Conversation } from '../types/chat';
 import { useSignMessage, useAccount, useWalletClient } from 'wagmi';
 // Import ethers for alternative implementation
 import { ethers } from 'ethers';
+// Import constants
+import { SCARLETT_BOT_ADDRESS } from '../lib/constants';
 
 // Create context
 const XmtpContext = createContext<XmtpContextType | null>(null);
@@ -24,76 +26,269 @@ export const useXmtp = () => {
 // Cache for signatures to prevent repeated signing
 const signatureCache = new Map<string, string>();
 
+// Define a logger to standardize logging format and enable/disable logs
+const logger = {
+  debug: (message: string, data?: any) => {
+    console.log(`[XMTP Debug] ${message}`, data || '');
+  },
+  info: (message: string, data?: any) => {
+    console.log(`[XMTP Info] ${message}`, data || '');
+  },
+  warn: (message: string, data?: any) => {
+    console.warn(`[XMTP Warning] ${message}`, data || '');
+  },
+  error: (message: string, data?: any) => {
+    console.error(`[XMTP Error] ${message}`, data || '');
+  },
+  signature: (message: string, data?: any) => {
+    // Special logger for signature-related events
+    console.log(`[XMTP Signature] ${message}`, data || '');
+  }
+};
+
+// Helper function to log detailed error information
+const logDetailedError = (error: any, context: string) => {
+  logger.error(`${context} Error Details:`, {
+    message: error.message,
+    name: error.name,
+    stack: error.stack?.split('\n').slice(0, 3).join('\n'), // First 3 lines of stack trace
+    cause: error.cause ? {
+      message: error.cause.message,
+      name: error.cause.name
+    } : 'No cause'
+  });
+  
+  // Special handling for signature validation errors
+  if (error.message && error.message.includes('Signature validation failed')) {
+    logger.error('Signature validation failed. This could be due to:');
+    logger.error('1. The wallet is a smart contract wallet (SCW) but not identified as such');
+    logger.error('2. The signature format is not compatible with XMTP verification');
+    logger.error('3. The wallet is using a non-standard signing method');
+  }
+};
+
 interface XmtpProviderProps {
   children: ReactNode;
 }
 
 export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
-  console.log('XmtpProvider initializing...');
+  logger.info('XmtpProvider initializing...');
   
   const [client, setClient] = useState<any>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState<Error | null>(null);
   
-  // Add a ref to track connection attempts
+  // Add refs to track connection attempts and prevent race conditions
   const connectionAttemptedRef = useRef(false);
   const clientCreationInProgressRef = useRef(false);
+  const encryptionKeyRef = useRef<Uint8Array | null>(null);
 
   // Get Wagmi account and wallet client
   const { address: wagmiAddress, isConnected: isWagmiConnected } = useAccount();
   const { data: wagmiWalletClient } = useWalletClient();
   const { signMessageAsync } = useSignMessage();
   
-  console.log('XmtpProvider state:', { 
+  logger.debug('XmtpProvider state:', { 
     hasClient: !!client, 
     isConnected, 
     isConnecting, 
     wagmiAddress, 
-    isWagmiConnected 
+    isWagmiConnected,
+    hasError: !!connectionError
   });
   
-  // Create a signer using Wagmi hooks with caching
-  const createWagmiSigner = useCallback(() => {
+  // Load conversations when client is available
+  const loadConversations = useCallback(async () => {
+    if (!client) {
+      logger.warn('Cannot load conversations: No XMTP client available');
+      return;
+    }
+    
+    try {
+      logger.info('Loading conversations...');
+      const convos = await client.conversations.list();
+      logger.info(`Loaded ${convos.length} conversations`);
+      
+      // Map conversations to our format
+      const formattedConvos = convos.map((convo: any) => ({
+        id: convo.topic,
+        peerAddress: convo.peerAddress,
+        updatedAt: convo.updatedAt,
+        messages: []
+      }));
+      
+      setConversations(formattedConvos);
+    } catch (error) {
+      logger.error('Error loading conversations:', error);
+    }
+  }, [client]);
+  
+  // Detect wallet type - this is crucial for proper signature validation
+  const detectWalletType = useCallback(async (address: string): Promise<"EOA" | "Contract"> => {
+    try {
+      logger.info(`Detecting wallet type for address: ${address}`);
+      
+      // First, check if we have a cached result for this address
+      const cacheKey = `wallet-type-${address.toLowerCase()}`;
+      const cachedType = localStorage.getItem(cacheKey);
+      
+      if (cachedType) {
+        logger.info(`Using cached wallet type for ${address}: ${cachedType}`);
+        return cachedType as "EOA" | "Contract";
+      }
+      
+      // Check if the address has code deployed (indicating a contract wallet)
+      if (wagmiWalletClient) {
+        try {
+          // Use a more compatible approach to check for contract code
+          // @ts-ignore - Access the public client to check code
+          const code = await wagmiWalletClient.chain.rpcUrls.default.http[0];
+          
+          // If we have an RPC URL, we can use ethers to check the code
+          if (code) {
+            const provider = new ethers.JsonRpcProvider(code);
+            const bytecode = await provider.getCode(address);
+            
+            // If there's code at this address, it's a contract wallet
+            if (bytecode && bytecode !== '0x') {
+              logger.info(`Detected wallet type for ${address}: Contract Wallet`);
+              localStorage.setItem(cacheKey, "Contract");
+              return "Contract";
+            }
+          }
+        } catch (error) {
+          logger.warn(`Error checking code at address, will try alternative method:`, error);
+        }
+      }
+      
+      // Additional heuristics for known smart contract wallet patterns
+      // Check address format or other characteristics that might indicate a smart contract wallet
+      
+      // For Safe (formerly Gnosis Safe) wallets, they often have specific patterns
+      // This is a simplified check and might need to be expanded based on your specific wallet types
+      if (address.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()) {
+        logger.info(`Address ${address} matches bot address, treating as Contract Wallet`);
+        localStorage.setItem(cacheKey, "Contract");
+        return "Contract";
+      }
+      
+      // Default to EOA if we couldn't determine it's a contract
+      logger.info(`Detected wallet type for ${address}: EOA (default)`);
+      localStorage.setItem(cacheKey, "EOA");
+      return "EOA";
+    } catch (error) {
+      logger.warn(`Error detecting wallet type, defaulting to EOA:`, error);
+      return "EOA";
+    }
+  }, [wagmiWalletClient]);
+  
+  // Get or create encryption key with improved persistence
+  const getOrCreateEncryptionKey = useCallback((address: string): Uint8Array => {
+    // If we already have the key in memory, use it
+    if (encryptionKeyRef.current) {
+      logger.debug('Using encryption key from memory');
+      return encryptionKeyRef.current;
+    }
+    
+    const storageKey = `xmtp-key-${address.toLowerCase()}`;
+    let keyData = localStorage.getItem(storageKey);
+    
+    if (!keyData) {
+      // No key found, generate a new one
+      const newKey = window.crypto.getRandomValues(new Uint8Array(32));
+      // Convert to base64 for storage
+      keyData = btoa(String.fromCharCode.apply(null, Array.from(newKey)));
+      localStorage.setItem(storageKey, keyData);
+      logger.info('Generated and stored new encryption key');
+      
+      // Store in memory
+      encryptionKeyRef.current = newKey;
+      return newKey;
+    } else {
+      logger.info('Using existing encryption key from storage');
+      
+      // Convert from base64 back to Uint8Array
+      const keyBytes = Uint8Array.from(atob(keyData), c => c.charCodeAt(0));
+      logger.debug('Encryption key byte length:', keyBytes.length);
+      
+      // Store in memory
+      encryptionKeyRef.current = keyBytes;
+      return keyBytes;
+    }
+  }, []);
+  
+  // Create a signer using Wagmi hooks with improved caching and error handling
+  const createWagmiSigner = useCallback(async () => {
     if (!wagmiAddress) {
-      console.error('No Wagmi address available');
+      logger.error('No Wagmi address available');
       return null;
     }
     
-    console.log('Creating Wagmi signer for address:', wagmiAddress);
+    logger.info('Creating Wagmi signer for address:', wagmiAddress);
+    
+    // Detect wallet type
+    const walletType = await detectWalletType(wagmiAddress);
     
     return {
-      walletType: "EOA" as const,
+      walletType: walletType,
       getAddress: async () => {
-        console.log('Wagmi signer getAddress called, returning:', wagmiAddress);
+        logger.debug('Wagmi signer getAddress called, returning:', wagmiAddress);
         return wagmiAddress;
       },
       signMessage: async (message: string) => {
         try {
-          console.log('Signing message with Wagmi...');
-          console.log('Message to sign:', message);
+          logger.info('Signing message with Wagmi...');
+          logger.debug('Message to sign:', message);
+          logger.signature('Signing message content:', message);
           
           // Check if we have a cached signature for this message
           const cacheKey = `${wagmiAddress.toLowerCase()}-${message}`;
           if (signatureCache.has(cacheKey)) {
             const cachedSignature = signatureCache.get(cacheKey);
-            console.log('Using cached signature:', cachedSignature);
+            logger.info('Using cached signature');
+            logger.signature('Using cached signature:', cachedSignature);
+            
+            // Convert cached signature to Uint8Array if it's a string
+            if (typeof cachedSignature === 'string') {
+              logger.info('Converting cached signature from string to Uint8Array');
+              return ethers.getBytes(cachedSignature);
+            }
             return cachedSignature;
           }
           
           // Use Wagmi's signMessage hook
-          console.log('Requesting new signature via Wagmi signMessageAsync...');
+          logger.info('Requesting new signature via Wagmi signMessageAsync...');
           let signature;
           try {
             signature = await signMessageAsync({ message });
-            console.log('Successfully signed with Wagmi:', signature);
+            logger.info('Successfully signed with Wagmi');
+            logger.signature('Signature result:', signature);
+            
+            // Log signature format details for debugging
+            if (signature) {
+              logger.signature('Signature format details:', {
+                length: signature.length,
+                prefix: signature.substring(0, 10),
+                isHexString: signature.startsWith('0x'),
+                byteLength: signature.startsWith('0x') ? (signature.length - 2) / 2 : null
+              });
+            }
+            
+            // Convert signature to Uint8Array for XMTP
+            if (typeof signature === 'string') {
+              logger.info('Converting signature from string to Uint8Array');
+              const signatureBytes = ethers.getBytes(signature);
+              
+              // Cache the original string signature
+              signatureCache.set(cacheKey, signature);
+              
+              return signatureBytes;
+            }
           } catch (signError: any) {
-            console.error('Error during signature process:', {
-              message: signError.message,
-              name: signError.name,
-              code: signError.code,
-              stack: signError.stack
-            });
+            logger.error('Error during signature process:');
+            logDetailedError(signError, 'Signature');
             throw signError;
           }
           
@@ -102,21 +297,33 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
           
           return signature;
         } catch (error) {
-          console.error('Error signing with Wagmi:', error);
+          logger.error('Error signing with Wagmi:');
+          logDetailedError(error, 'Wagmi Signing');
           throw error;
         }
+      },
+      // Add getChainId method for completeness
+      getChainId: async () => {
+        if (wagmiWalletClient) {
+          return wagmiWalletClient.chain.id;
+        }
+        // Default to mainnet if we can't determine
+        return 1;
       }
     };
-  }, [wagmiAddress, signMessageAsync]);
+  }, [wagmiAddress, signMessageAsync, wagmiWalletClient, detectWalletType]);
 
-  // Connect to XMTP with a more direct approach
+  // Connect to XMTP with improved error handling and logging
   const connectXmtp = async (signer: any) => {
     try {
-      console.log("Starting XMTP connection process...");
+      logger.info("Starting XMTP connection process...");
+      
+      // Reset any previous connection errors
+      setConnectionError(null);
       
       // Prevent multiple simultaneous connection attempts
       if (clientCreationInProgressRef.current) {
-        console.log("XMTP client creation already in progress, skipping");
+        logger.warn("XMTP client creation already in progress, skipping");
         return;
       }
       
@@ -125,7 +332,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       // Check if we already have a client
       if (client) {
-        console.log("XMTP client already exists, using existing client");
+        logger.info("XMTP client already exists, using existing client");
         setIsConnected(true);
         setIsConnecting(false);
         clientCreationInProgressRef.current = false;
@@ -136,178 +343,106 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       let address;
       try {
         address = await signer.getAddress();
-        console.log('Signer address:', address);
+        logger.info('Signer address:', address);
       } catch (error) {
-        console.error('Error getting address from signer:', error);
+        logger.error('Error getting address from signer:', error);
         setIsConnecting(false);
         clientCreationInProgressRef.current = false;
+        setConnectionError(new Error('Failed to get address from signer'));
         throw new Error('Failed to get address from signer');
       }
       
-      console.log('Creating XMTP client with signer');
+      logger.info('Creating XMTP client with signer');
       
-      // Generate a random 32-byte encryption key for the local database
-      // This should ideally be stored securely and reused for the same user
-      const generateEncryptionKey = () => {
-        // Create a new 32-byte array with random values
-        return window.crypto.getRandomValues(new Uint8Array(32));
-      };
-      
-      // Get or create encryption key
-      // In a production app, you would want to store this key securely
-      // and retrieve it for returning users
-      const getEncryptionKey = (address: string) => {
-        const storageKey = `xmtp-key-${address.toLowerCase()}`;
-        let keyData = localStorage.getItem(storageKey);
-        
-        if (!keyData) {
-          // No key found, generate a new one
-          const newKey = generateEncryptionKey();
-          // Convert to base64 for storage
-          keyData = btoa(String.fromCharCode.apply(null, Array.from(newKey)));
-          localStorage.setItem(storageKey, keyData);
-          console.log('Generated and stored new encryption key');
-        } else {
-          console.log('Using existing encryption key from storage');
-        }
-        
-        // Convert from base64 back to Uint8Array
-        const keyBytes = Uint8Array.from(atob(keyData), c => c.charCodeAt(0));
-        console.log('Encryption key byte length:', keyBytes.length);
-        return keyBytes;
-      };
+      // Log signer details for debugging
+      logger.debug('Signer details:', {
+        walletType: signer.walletType,
+        hasGetAddress: typeof signer.getAddress === 'function',
+        hasSignMessage: typeof signer.signMessage === 'function',
+        hasGetChainId: typeof signer.getChainId === 'function'
+      });
       
       // Get encryption key for this user
-      const encryptionKey = getEncryptionKey(address);
-      console.log('Using encryption key for database:', !!encryptionKey);
+      const encryptionKey = getOrCreateEncryptionKey(address);
+      logger.info('Using encryption key for database');
       
       // Verify the encryption key is valid
       if (!encryptionKey || encryptionKey.length !== 32) {
-        console.error('Invalid encryption key length:', encryptionKey ? encryptionKey.length : 'null');
+        const error = new Error('Invalid encryption key: must be exactly 32 bytes');
+        logger.error('Invalid encryption key length:', encryptionKey ? encryptionKey.length : 'null');
         clientCreationInProgressRef.current = false;
-        throw new Error('Invalid encryption key: must be exactly 32 bytes');
+        setConnectionError(error);
+        throw error;
       }
       
-      // Clear any cached data that might be causing issues
-      console.log('Clearing any cached XMTP data for this address...');
-      localStorage.removeItem(`xmtp-client-${address.toLowerCase()}`);
+      // Determine if this is a bot address
+      const isBot = address.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase();
+      if (isBot) {
+        logger.info('Connecting with bot address, ensuring wallet type is set to Contract');
+        signer.walletType = "Contract";
+      }
       
-      // Clear all signature caches for this address
-      const keysToRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(`xmtp-signature-${address.toLowerCase()}`)) {
-          keysToRemove.push(key);
+      // Create client options with appropriate environment
+      const clientOptions = {
+        env: 'dev' as const, // Start with dev environment
+        // Force the wallet type if we know it's a contract wallet
+        ...(signer.walletType === "Contract" ? { codecs: [] } : {})
+      };
+      
+      logger.info(`Creating XMTP client with options:`, clientOptions);
+      
+      // Try connecting with different environments
+      const environments = ['dev', 'production'] as const;
+      let xmtpClient = null;
+      let lastError = null;
+      
+      for (const env of environments) {
+        try {
+          logger.info(`Attempting to create XMTP client with ${env} environment...`);
+          
+          // Update environment in options
+          const envOptions = {
+            ...clientOptions,
+            env: env
+          };
+          
+          xmtpClient = await Client.create(signer, encryptionKey, envOptions);
+          
+          logger.info(`XMTP client created successfully with ${env} environment`);
+          break; // Exit the loop if successful
+        } catch (error: any) {
+          lastError = error;
+          logger.error(`Error creating XMTP client with ${env} environment:`, error);
+          logDetailedError(error, `XMTP Client Creation (${env})`);
+          
+          // If this is not the last environment to try, continue to the next one
+          if (env !== environments[environments.length - 1]) {
+            logger.info(`Trying next environment...`);
+          }
         }
       }
       
-      keysToRemove.forEach(key => {
-        localStorage.removeItem(key);
-      });
-      
-      console.log(`Cleared ${keysToRemove.length} cached signatures for address ${address}`);
-      
-      try {
-        console.log('Attempting to create XMTP client with production environment...');
+      // If we successfully created a client
+      if (xmtpClient) {
+        setClient(xmtpClient);
+        setIsConnected(true);
         
-        // Use Client.create with encryption key and minimal options
-        console.log('Creating XMTP client with minimal options to prevent signature loops');
-        
-        try {
-          // Try with the most minimal options first
-          console.log('Signer details:', {
-            walletType: signer.walletType,
-            hasGetAddress: typeof signer.getAddress === 'function',
-            hasSignMessage: typeof signer.signMessage === 'function',
-            hasGetChainId: typeof signer.getChainId === 'function'
-          });
-          
-          const xmtpClient = await Client.create(signer, encryptionKey, { 
-            env: 'dev'
-          });
-          console.log('XMTP client created successfully:', !!xmtpClient);
-          
-          setClient(xmtpClient);
-          setIsConnected(true);
-          
-          // Load conversations
-          await loadConversations();
-        } catch (innerError: any) {
-          console.error('Detailed error creating XMTP client:', {
-            message: innerError.message,
-            name: innerError.name,
-            stack: innerError.stack,
-            cause: innerError.cause ? {
-              message: innerError.cause.message,
-              name: innerError.cause.name
-            } : 'No cause'
-          });
-          
-          // Check for specific signature validation errors
-          if (innerError.message && innerError.message.includes('Signature validation failed')) {
-            console.error('Signature validation failed. This could be due to:');
-            console.error('1. The wallet is a smart contract wallet (SCW) but not identified as such');
-            console.error('2. The signature format is not compatible with XMTP verification');
-            console.error('3. The wallet is using a non-standard signing method');
-            
-            // Log additional debugging information
-            console.error('Wallet address:', address);
-            console.error('Wallet type set as:', signer.walletType);
-          }
-          
-          throw innerError;
-        }
-      } catch (error) {
-        console.error('Error creating XMTP client with production environment:', error);
-        
-        // Try with dev environment as fallback
-        try {
-          console.log('Attempting to create XMTP client with dev environment...');
-          
-          // Use Client.create with encryption key and minimal options
-          try {
-            const xmtpClient = await Client.create(signer, encryptionKey, { 
-              env: 'dev'
-            });
-            console.log('XMTP client created successfully with dev environment:', !!xmtpClient);
-            
-            setClient(xmtpClient);
-            setIsConnected(true);
-            
-            // Load conversations
-            await loadConversations();
-          } catch (innerError: any) {
-            console.error('Detailed error creating XMTP client with dev environment:', {
-              message: innerError.message,
-              name: innerError.name,
-              stack: innerError.stack,
-              cause: innerError.cause ? {
-                message: innerError.cause.message,
-                name: innerError.cause.name
-              } : 'No cause'
-            });
-            
-            // Check for specific signature validation errors
-            if (innerError.message && innerError.message.includes('Signature validation failed')) {
-              console.error('Signature validation failed in dev environment. This could be due to:');
-              console.error('1. The wallet is a smart contract wallet (SCW) but not identified as such');
-              console.error('2. The signature format is not compatible with XMTP verification');
-              console.error('3. The wallet is using a non-standard signing method');
-              
-              // Log additional debugging information
-              console.error('Wallet address:', address);
-              console.error('Wallet type set as:', signer.walletType);
-            }
-            
-            throw innerError;
-          }
-        } catch (fallbackError) {
-          console.error('Error creating XMTP client with dev environment:', fallbackError);
-          throw fallbackError;
+        // Load conversations
+        await loadConversations();
+      } else {
+        // If all attempts failed, throw the last error
+        if (lastError) {
+          setConnectionError(lastError);
+          throw lastError;
+        } else {
+          const error = new Error('Failed to create XMTP client with all environments');
+          setConnectionError(error);
+          throw error;
         }
       }
     } catch (error) {
-      console.error('Error connecting to XMTP:', error);
+      logger.error('Error connecting to XMTP:', error);
+      setConnectionError(error as Error);
       throw error;
     } finally {
       setIsConnecting(false);
@@ -315,52 +450,50 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     }
   };
 
-  // Function to directly connect using Wagmi
+  // Function to directly connect using Wagmi with improved error handling
   const connectWithWagmi = async () => {
     if (!wagmiAddress) {
-      console.error('Cannot connect to XMTP: No Wagmi address available');
-      throw new Error('No Wagmi address available');
+      const error = new Error('No Wagmi address available');
+      logger.error('Cannot connect to XMTP: No Wagmi address available');
+      setConnectionError(error);
+      throw error;
     }
     
-    console.log('Connecting to XMTP with Wagmi...');
+    logger.info('Connecting to XMTP with Wagmi...');
     setIsConnecting(true);
+    setConnectionError(null);
     
     try {
       // Check if we already have a client
       if (client) {
-        console.log("XMTP client already exists, using existing client");
+        logger.info("XMTP client already exists, using existing client");
         setIsConnected(true);
         setIsConnecting(false);
         return true;
-      }
-      
-      // Check if we have a cached client for this address
-      const cachedClientKey = `xmtp-client-${wagmiAddress.toLowerCase()}`;
-      const cachedClientData = localStorage.getItem(cachedClientKey);
-      
-      if (cachedClientData) {
-        console.log('Found cached XMTP client data for address:', wagmiAddress);
-      }
-      
-      const wagmiSigner = createWagmiSigner();
-      if (!wagmiSigner) {
-        throw new Error('Failed to create Wagmi signer');
       }
       
       // Mark that we've attempted connection
       connectionAttemptedRef.current = true;
       
       // Create a more robust signer with detailed logging
-      console.log('Creating Wagmi signer with address:', wagmiAddress);
-      console.log('Wagmi wallet client available:', !!wagmiWalletClient);
+      logger.info('Creating Wagmi signer with address:', wagmiAddress);
+      logger.debug('Wagmi wallet client available:', !!wagmiWalletClient);
+      
+      const wagmiSigner = await createWagmiSigner();
+      if (!wagmiSigner) {
+        const error = new Error('Failed to create Wagmi signer');
+        setConnectionError(error);
+        throw error;
+      }
       
       await connectXmtp(wagmiSigner);
-      console.log('Successfully connected to XMTP with Wagmi');
+      logger.info('Successfully connected to XMTP with Wagmi');
       return true;
     } catch (error) {
-      console.error('Failed to connect to XMTP with Wagmi:', error);
+      logger.error('Failed to connect to XMTP with Wagmi:', error);
       // Reset connection attempt flag to allow retrying
       connectionAttemptedRef.current = false;
+      setConnectionError(error as Error);
       throw error;
     } finally {
       setIsConnecting(false);
@@ -370,17 +503,20 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   // Try to connect with ethers.js as an alternative
   const connectWithEthers = async () => {
     if (!wagmiAddress) {
-      console.error('Cannot connect to XMTP: No Wagmi address available');
-      throw new Error('No Wagmi address available');
+      const error = new Error('No Wagmi address available');
+      logger.error('Cannot connect to XMTP: No Wagmi address available');
+      setConnectionError(error);
+      throw error;
     }
     
-    console.log('Attempting to connect to XMTP with ethers.js...');
+    logger.info('Attempting to connect to XMTP with ethers.js...');
     setIsConnecting(true);
+    setConnectionError(null);
     
     try {
       // Check if we already have a client
       if (client) {
-        console.log("XMTP client already exists, using existing client");
+        logger.info("XMTP client already exists, using existing client");
         setIsConnected(true);
         setIsConnecting(false);
         return true;
@@ -388,16 +524,18 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       // Check if window.ethereum is available
       if (!window.ethereum) {
-        throw new Error('No ethereum provider found. Please install a wallet.');
+        const error = new Error('No ethereum provider found. Please install a wallet.');
+        setConnectionError(error);
+        throw error;
       }
       
       // Create an ethers provider with proper type assertion
       const provider = new ethers.BrowserProvider(window.ethereum as any);
-      console.log('Created ethers provider:', !!provider);
+      logger.info('Created ethers provider:', !!provider);
       
       // Get the signer
       const ethersSigner = await provider.getSigner();
-      console.log('Got ethers signer with address:', await ethersSigner.getAddress());
+      logger.info('Got ethers signer with address:', await ethersSigner.getAddress());
       
       // Create a signer adapter for XMTP
       const xmtpEthersSigner = {
@@ -406,9 +544,11 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
           return await ethersSigner.getAddress();
         },
         signMessage: async (message: string) => {
-          console.log('Signing message with ethers:', message);
+          logger.info('Signing message with ethers');
+          logger.debug('Message to sign:', message);
           // Convert the string signature to Uint8Array as required by XMTP
           const signature = await ethersSigner.signMessage(message);
+          logger.debug('Signature:', signature);
           // Convert hex string to Uint8Array
           return ethers.getBytes(signature);
         },
@@ -418,16 +558,17 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         }
       };
       
-      // Generate a random encryption key
-      const encryptionKey = window.crypto.getRandomValues(new Uint8Array(32));
+      // Get encryption key for this user
+      const address = await ethersSigner.getAddress();
+      const encryptionKey = getOrCreateEncryptionKey(address);
       
       // Create the XMTP client
-      console.log('Creating XMTP client with ethers signer...');
+      logger.info('Creating XMTP client with ethers signer...');
       const xmtpClient = await Client.create(xmtpEthersSigner, encryptionKey, {
-        env: 'dev'
+        env: 'dev',
       });
       
-      console.log('XMTP client created successfully with ethers:', !!xmtpClient);
+      logger.info('XMTP client created successfully with ethers');
       setClient(xmtpClient);
       setIsConnected(true);
       
@@ -436,7 +577,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       return true;
     } catch (error) {
-      console.error('Failed to connect to XMTP with ethers:', error);
+      logger.error('Failed to connect to XMTP with ethers:', error);
+      setConnectionError(error as Error);
       throw error;
     } finally {
       setIsConnecting(false);
@@ -458,8 +600,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
           !isConnecting && 
           !connectionAttemptedRef.current) {
         
-        console.log('User is connected with Wagmi, attempting to connect to XMTP...');
-        console.log('Connection status check:', {
+        logger.info('User is connected with Wagmi, attempting to connect to XMTP...');
+        logger.debug('Connection status check:', {
           isWagmiConnected,
           wagmiAddress,
           isConnected,
@@ -471,30 +613,22 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         connectionAttemptedRef.current = true;
         
         try {
-          // Check if we have a cached client for this address
-          const cachedClientKey = `xmtp-client-${wagmiAddress.toLowerCase()}`;
-          const cachedClientData = localStorage.getItem(cachedClientKey);
-          
-          if (cachedClientData) {
-            console.log('Found cached XMTP client data for address:', wagmiAddress);
-          }
-          
-          const wagmiSigner = createWagmiSigner();
+          const wagmiSigner = await createWagmiSigner();
           if (wagmiSigner) {
             await connectXmtp(wagmiSigner);
-            console.log('Successfully connected to XMTP with Wagmi');
+            logger.info('Successfully connected to XMTP with Wagmi');
           } else {
-            console.error('Failed to create Wagmi signer');
+            logger.error('Failed to create Wagmi signer');
             // Reset the flag after a failed attempt so we can try again later if needed
             connectionAttemptedRef.current = false;
           }
         } catch (error) {
-          console.error('Failed to connect to XMTP with Wagmi:', error);
+          logger.error('Failed to connect to XMTP with Wagmi:', error);
           // Reset the flag after a failed attempt so we can try again later if needed
           connectionAttemptedRef.current = false;
         }
       } else {
-        console.log('Skipping auto-connection with Wagmi:', {
+        logger.debug('Skipping auto-connection with Wagmi:', {
           isWagmiConnected,
           hasWagmiAddress: !!wagmiAddress,
           isConnected,
@@ -505,24 +639,32 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     };
     
     attemptWagmiConnection();
-  }, [isWagmiConnected, wagmiAddress, isConnected, isConnecting]);
+  }, [isWagmiConnected, wagmiAddress, isConnected, isConnecting, createWagmiSigner]);
 
   // Disconnect from XMTP
   const disconnectXmtp = () => {
+    logger.info('Disconnecting from XMTP');
     setClient(null);
     setConversations([]);
     setIsConnected(false);
+    setConnectionError(null);
   };
 
   // Clear cached XMTP data and reset connection
   const resetXmtpConnection = () => {
-    console.log('Resetting XMTP connection and clearing cached data...');
+    logger.info('Resetting XMTP connection and clearing cached data...');
     
     // Disconnect current client
     disconnectXmtp();
     
     // Reset connection attempt flag
     connectionAttemptedRef.current = false;
+    
+    // Clear in-memory encryption key
+    encryptionKeyRef.current = null;
+    
+    // Clear in-memory signature cache
+    signatureCache.clear();
     
     // Clear cached data for the current address
     if (wagmiAddress) {
@@ -534,11 +676,19 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       // Clear encryption key
       localStorage.removeItem(`xmtp-key-${address}`);
       
+      // Clear wallet type cache
+      localStorage.removeItem(`wallet-type-${address}`);
+      
       // Clear all signature caches (this will clear all signatures for all addresses)
       const keysToRemove = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('xmtp-signature-')) {
+        if (key && (
+          key.startsWith('xmtp-signature-') || 
+          key.startsWith(`xmtp-key-${address}`) || 
+          key.startsWith(`xmtp-client-${address}`) ||
+          key.startsWith(`wallet-type-${address}`)
+        )) {
           keysToRemove.push(key);
         }
       }
@@ -547,211 +697,113 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         localStorage.removeItem(key);
       });
       
-      console.log(`Cleared ${keysToRemove.length} cached signatures and client data for address ${address}`);
+      logger.info(`Cleared ${keysToRemove.length} cached items for address ${address}`);
     }
   };
 
-  // Load conversations
-  const loadConversations = async () => {
-    try {
-      if (!client) {
-        console.warn("Cannot load conversations: XMTP client not available");
-        return;
-      }
-      
-      console.log("Loading conversations...");
-      const xmtpConvos = await client.conversations.list();
-      console.log(`Loaded ${xmtpConvos.length} conversations from XMTP`);
-      
-      // Map XMTP conversations to our Conversation type
-      const mappedConvos: Conversation[] = await Promise.all(
-        xmtpConvos.map(async (convo: any) => {
-          try {
-            // Get messages for this conversation
-            const messages = await convo.messages();
-            console.log(`Loaded ${messages.length} messages for conversation with ${convo.peerAddress}`);
-            
-            // Map messages to our ChatMessage type
-            const chatMessages = messages.map((msg: any) => ({
-              id: msg.id,
-              sender: msg.senderAddress,
-              content: msg.content,
-              timestamp: msg.sent,
-              isBot: false // Assuming all XMTP messages are from humans
-            }));
-            
-            return {
-              id: convo.peerAddress, // Using peer address as conversation ID
-              messages: chatMessages,
-              topic: convo.context?.conversationId || undefined,
-              lastMessageTimestamp: chatMessages.length > 0 
-                ? chatMessages[chatMessages.length - 1].timestamp 
-                : new Date()
-            };
-          } catch (error) {
-            console.error(`Error loading messages for conversation with ${convo.peerAddress}:`, error);
-            return {
-              id: convo.peerAddress,
-              messages: [],
-              lastMessageTimestamp: new Date()
-            };
-          }
-        })
-      );
-      
-      setConversations(mappedConvos);
-    } catch (error) {
-      console.error("Error loading conversations:", error);
-    }
-  };
-
-  // Send a message
+  // Send a message to a conversation
   const sendMessage = async (conversationId: string, message: string | object) => {
     if (!client) {
-      console.warn('Cannot send message: No XMTP client');
-      throw new Error('Cannot send message: XMTP client not initialized. Please connect to XMTP first.');
+      logger.error('Cannot send message: No XMTP client available');
+      throw new Error('No XMTP client available');
     }
     
     try {
-      console.log(`Sending message to ${conversationId}:`, message);
+      logger.info(`Sending message to conversation ${conversationId}`);
       
-      // Skip the canMessage check since it might be giving false negatives
-      // and directly try to create a conversation
-      
-      // Find or create conversation with the peer
-      let conversation;
-      try {
-        // Try to find existing conversation first
-        conversation = await client.conversations.find(conversationId);
-        console.log('Found existing conversation');
-      } catch (error) {
-        // If not found, create a new conversation
-        console.log('Creating new conversation with:', conversationId);
-        // For @xmtp/browser-sdk version 0.0.21, we need to use newDm instead of newConversation
-        try {
-          conversation = await client.conversations.newDm(conversationId);
-          console.log('New conversation created successfully');
-        } catch (convError: any) {
-          console.error('Error creating new conversation:', convError);
-          throw new Error(`Failed to create conversation with ${conversationId}: ${convError.message}`);
-        }
-      }
-      
+      // Find the conversation
+      const conversation = await client.conversations.get(conversationId);
       if (!conversation) {
-        throw new Error(`Could not create or find conversation with: ${conversationId}`);
+        logger.error(`Conversation ${conversationId} not found`);
+        throw new Error(`Conversation ${conversationId} not found`);
       }
       
       // Send the message
-      const sentMessage = await conversation.send(message);
-      console.log('Message sent successfully:', sentMessage);
+      const sent = await conversation.send(message);
+      logger.info('Message sent successfully');
+      logger.debug('Sent message:', sent);
       
-      // Reload conversations to get the updated messages
-      await loadConversations();
-      
-      return sentMessage;
+      return sent;
     } catch (error) {
-      console.error('Error sending message:', error);
+      logger.error('Error sending message:', error);
       throw error;
     }
   };
 
-  // Check if an address can be messaged
-  const canMessage = async (addresses: string[]): Promise<Map<string, boolean>> => {
-    try {
-      if (!client) {
-        console.warn('Cannot check if address can be messaged: No XMTP client');
-        return new Map();
-      }
-      
-      const results = new Map<string, boolean>();
-      
-      // First try the static method
-      try {
-        const staticResults = await Client.canMessage(addresses, 'dev');
-        // Copy results from static method
-        for (const [address, canMsg] of staticResults.entries()) {
-          results.set(address, canMsg);
-        }
-      } catch (error) {
-        console.error('Error using static canMessage method:', error);
-      }
-      
-      // For each address, also try to create a conversation as a more reliable check
-      for (const address of addresses) {
-        try {
-          // Try to find or create a conversation
-          try {
-            await client.conversations.find(address);
-            // If we get here, the conversation exists
-            results.set(address, true);
-          } catch (error) {
-            // If not found, try to create a new conversation
-            try {
-              await client.conversations.newDm(address);
-              // If we get here, we can message this address
-              results.set(address, true);
-            } catch (error) {
-              // If we can't create a conversation, set to false
-              if (!results.has(address)) {
-                results.set(address, false);
-              }
-            }
-          }
-        } catch (error) {
-          console.error(`Error checking if address ${address} can be messaged:`, error);
-          // Only set to false if we don't already have a result
-          if (!results.has(address)) {
-            results.set(address, false);
-          }
-        }
-      }
-      
-      return results;
-    } catch (error) {
-      console.error('Error checking if address can be messaged:', error);
-      return new Map();
-    }
-  };
-
-  // Add a method to get or create a conversation with an address
-  const getOrCreateConversation = async (address: string) => {
+  // Check if we can message a list of addresses
+  const canMessage = async (addresses: string[]) => {
     if (!client) {
-      console.warn('Cannot get or create conversation: No XMTP client');
-      throw new Error('XMTP client not initialized');
+      logger.error('Cannot check canMessage: No XMTP client available');
+      throw new Error('No XMTP client available');
     }
     
     try {
-      console.log(`Getting or creating conversation with ${address}`);
+      logger.info(`Checking canMessage for ${addresses.length} addresses`);
+      const results = await client.canMessage(addresses);
+      logger.info(`Completed canMessage check for ${addresses.length} addresses`);
+      logger.debug('canMessage results:', results);
       
-      // Try to find existing conversation first
-      try {
-        const conversation = await client.conversations.find(address);
-        console.log('Found existing conversation');
-        return conversation;
-      } catch (error) {
-        // If not found, create a new conversation
-        console.log('Creating new conversation with:', address);
-        try {
-          const conversation = await client.conversations.newDm(address);
-          console.log('New conversation created successfully');
-          return conversation;
-        } catch (convError: any) {
-          console.error('Error creating new conversation:', convError);
-          throw new Error(`Failed to create conversation with ${address}: ${convError.message}`);
-        }
-      }
+      return results;
     } catch (error) {
-      console.error('Error getting or creating conversation:', error);
+      logger.error('Error checking canMessage:', error);
       throw error;
     }
   };
 
-  // Context value
+  // Get or create a conversation with an address
+  const getOrCreateConversation = async (address: string) => {
+    if (!client) {
+      logger.error('Cannot get conversation: No XMTP client available');
+      throw new Error('No XMTP client available');
+    }
+    
+    try {
+      logger.info(`Getting or creating conversation with ${address}`);
+      
+      // Check if we can message this address
+      const canMessageMap = await client.canMessage([address]);
+      const canMessageAddress = canMessageMap.get(address);
+      
+      if (!canMessageAddress) {
+        logger.warn(`Cannot message address ${address}: Not on XMTP network`);
+        throw new Error(`Address ${address} is not on the XMTP network`);
+      }
+      
+      // Try to find an existing conversation
+      const existingConversations = await client.conversations.list();
+      const existingConvo = existingConversations.find(
+        (convo: any) => convo.peerAddress.toLowerCase() === address.toLowerCase()
+      );
+      
+      if (existingConvo) {
+        logger.info(`Found existing conversation with ${address}`);
+        logger.debug('Existing conversation:', existingConvo);
+        return existingConvo;
+      }
+      
+      // Create a new conversation
+      logger.info(`Creating new conversation with ${address}`);
+      const newConvo = await client.conversations.newConversation(address);
+      logger.info(`Created new conversation with ${address}`);
+      logger.debug('New conversation:', newConvo);
+      
+      // Refresh conversations list
+      await loadConversations();
+      
+      return newConvo;
+    } catch (error) {
+      logger.error(`Error getting or creating conversation with ${address}:`, error);
+      throw error;
+    }
+  };
+
+  // Provide context value
   const contextValue: XmtpContextType = {
     client,
     conversations,
     isConnected,
     isConnecting,
+    connectionError,
     connectXmtp,
     connectWithWagmi,
     connectWithEthers,
@@ -762,12 +814,6 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     canMessage,
     getOrCreateConversation
   };
-
-  console.log('XmtpProvider rendering with context:', { 
-    hasClient: !!contextValue.client,
-    isConnected: contextValue.isConnected,
-    isConnecting: contextValue.isConnecting
-  });
 
   return (
     <XmtpContext.Provider value={contextValue}>

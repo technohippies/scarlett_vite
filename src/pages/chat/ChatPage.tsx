@@ -6,9 +6,7 @@ import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
-
-// The bot address - consistent across the application
-const SCARLETT_BOT_ADDRESS = '0xc94A2d246026CedEE7d395B5B94C83aaCAd67773';
+import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
 
 // Simple date formatter function to prevent Invalid Date issues
 const formatMessageTime = (timestamp: Date) => {
@@ -31,7 +29,7 @@ const formatMessageTime = (timestamp: Date) => {
 };
 
 // Helper function to determine if a message is from the bot
-const isBotMessage = (message: any, ourWalletAddress?: string, previousMessages?: any[]): boolean => {
+const isBotMessage = (message: any, ourWalletAddress?: string): boolean => {
   // Check if the message has explicit bot flag
   if (message.isBot === true) {
     return true;
@@ -168,7 +166,7 @@ const ChatPage: React.FC = () => {
             
             // Use the helper function to determine if message is from bot
             // Pass the accumulated messages so far for context
-            const isFromBot = isBotMessage(msg, walletAddress, processedMessages);
+            const isFromBot = isBotMessage(msg, walletAddress);
             
             const formattedMessage = {
               id: msg.id || Date.now().toString(),
@@ -289,7 +287,7 @@ const ChatPage: React.FC = () => {
             const messageExists = prev.some(msg => msg.id === message.id);
             
             // For user messages coming from the stream, we need to be extra careful about duplicates
-            const isFromBot = isBotMessage(message, walletAddress, prev);
+            const isFromBot = isBotMessage(message, walletAddress);
             
             // If this is a user message, check for duplicates by content
             if (!isFromBot && !messageExists) {

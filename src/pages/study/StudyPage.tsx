@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { useQuestions } from '../../hooks/useQuestions';
-import { Play, Pause, ArrowRight, X, GlobeSimple } from '@phosphor-icons/react';
+import { Play, Pause, ArrowRight, X, GlobeSimple, CaretLeft } from '@phosphor-icons/react';
 import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
+import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
 
 // Interface for the question answer JSON sent to XMTP
 interface QuestionAnswerRequest {
@@ -71,12 +72,14 @@ const StudyPage: React.FC = () => {
     currentIndex,
     totalQuestions,
     resetQuestions
-  } = useQuestions(questionsCid, studyLanguage);
+  } = useQuestions(questionsCid);
   
-  // Reset questions when study language changes
+  // Reset questions when study language changes - FIXED: removed resetQuestions from dependency array
   useEffect(() => {
-    resetQuestions();
-  }, [studyLanguage, resetQuestions]);
+    if (resetQuestions) {
+      resetQuestions();
+    }
+  }, [studyLanguage]); // Removed resetQuestions from dependency array to prevent infinite loop
   
   const [selectedAnswer, setSelectedAnswer] = useState<'a' | 'b' | 'c' | 'd' | null>(null);
   const [feedback, setFeedback] = useState<{
@@ -90,9 +93,10 @@ const StudyPage: React.FC = () => {
   const [audioHasPlayed, setAudioHasPlayed] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [isXmtpReady, setIsXmtpReady] = useState(false);
+  const [xmtpConnectionAttempted, setXmtpConnectionAttempted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   
-  // Check if XMTP is connected
+  // Check if XMTP is connected - FIXED: added connection attempt tracking
   useEffect(() => {
     if (xmtp?.isConnected) {
       setIsXmtpReady(true);
@@ -124,11 +128,37 @@ const StudyPage: React.FC = () => {
     
     // Check if XMTP is ready
     if (!isXmtpReady) {
-      setFeedback({
-        isCorrect: false,
-        explanation: 'XMTP connection is not ready. Please wait a moment and try again.'
-      });
-      return;
+      // FIXED: Only attempt to connect once to prevent repeated signature requests
+      if (!xmtpConnectionAttempted && xmtp) {
+        setXmtpConnectionAttempted(true);
+        setFeedback({
+          isCorrect: false,
+          explanation: 'Connecting to XMTP...'
+        });
+        
+        try {
+          // Try to get the wallet client from the context
+          if (xmtp.connectWithWagmi) {
+            await xmtp.connectWithWagmi();
+            setIsXmtpReady(true);
+            setFeedback(null);
+            return; // Exit and let the user try again
+          }
+        } catch (error) {
+          console.error('Failed to connect to XMTP:', error);
+          setFeedback({
+            isCorrect: false,
+            explanation: 'Failed to connect to XMTP. Please refresh the page and try again.'
+          });
+          return;
+        }
+      } else {
+        setFeedback({
+          isCorrect: false,
+          explanation: 'XMTP connection is not ready. Please refresh the page and try again.'
+        });
+        return;
+      }
     }
     
     setSelectedAnswer(answer);
@@ -222,7 +252,6 @@ const StudyPage: React.FC = () => {
     
     try {
       // Get or create conversation with the bot
-      const SCARLETT_BOT_ADDRESS = '0xc94A2d246026CedEE7d395B5B94C83aaCAd67773';
       const conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
       
       if (!conversation) {
@@ -246,48 +275,19 @@ const StudyPage: React.FC = () => {
             
             // Log a sample message to understand its structure
             if (messages.length > 0) {
-              // Use a custom replacer function to handle BigInt values
-              const bigIntReplacer = (key: string, value: any) => {
-                // Convert BigInt to String during serialization
-                if (typeof value === 'bigint') {
-                  return value.toString() + 'n';
-                }
-                return value;
-              };
-              
               try {
+                // Use the global bigIntReplacer function defined at the top of the file
                 console.log('Sample message structure:', JSON.stringify(messages[0], bigIntReplacer));
                 
                 // Try to access properties using different methods
                 const sampleMsg = messages[0];
                 console.log('Direct properties:', Object.keys(sampleMsg));
-                
-                // Check if it's a class instance with getters
-                if (typeof sampleMsg === 'object' && sampleMsg !== null) {
-                  try {
-                    // Try different ways to access the content
-                    console.log('Content access attempts:');
-                    console.log('- content property:', sampleMsg.content);
-                    console.log('- content() method:', typeof sampleMsg.content === 'function' ? sampleMsg.content() : 'Not a function');
-                    console.log('- get("content"):', typeof sampleMsg.get === 'function' ? sampleMsg.get('content') : 'No get method');
-                    
-                    // Try to access sender information
-                    console.log('Sender access attempts:');
-                    console.log('- senderAddress property:', sampleMsg.senderAddress);
-                    console.log('- sender property:', sampleMsg.sender);
-                    console.log('- from property:', sampleMsg.from);
-                    
-                    // Check for private properties
-                    const protoKeys = Object.getOwnPropertyNames(Object.getPrototypeOf(sampleMsg));
-                    console.log('Prototype methods:', protoKeys);
-                  } catch (e) {
-                    console.log('Error inspecting message:', e);
-                  }
-                }
               } catch (e) {
                 console.log('Error stringifying message:', e);
-                // Log the message in a safer way
-                console.log('Message keys:', Object.keys(messages[0]));
+                // Log the message keys in a safer way
+                if (messages[0]) {
+                  console.log('Message keys:', Object.keys(messages[0]));
+                }
               }
             }
             
@@ -320,15 +320,24 @@ const StudyPage: React.FC = () => {
             console.log('Relevant messages found:', relevantMessages.length);
             
             // Look for response messages (not our own request)
+            const botAddress = SCARLETT_BOT_ADDRESS.toLowerCase();
             const responseMessages = relevantMessages.filter((msg: XmtpMessage) => {
               try {
+                // Check if this message is from the bot
+                // First check if senderAddress exists and matches the bot address
+                if (msg.senderAddress && msg.senderAddress.toLowerCase() === botAddress) {
+                  return true;
+                }
+                
+                // If we can't determine by sender, check content
                 const content = typeof msg.content === 'string' 
                   ? msg.content 
                   : JSON.stringify(msg.content, bigIntReplacer);
                 
-                // Check if this is a response (contains "correct" field)
-                return content.includes('correct') && content.includes('explanation');
+                // Check if this is a response (contains "correct" field or "explanation")
+                return content.includes('explanation');
               } catch (e) {
+                console.log('Error filtering response message:', e);
                 return false;
               }
             });
@@ -338,11 +347,20 @@ const StudyPage: React.FC = () => {
             if (responseMessages.length > 0) {
               // Get the most recent response
               const latestResponse = responseMessages[0];
-              const responseContent = typeof latestResponse.content === 'string' 
-                ? latestResponse.content 
-                : JSON.stringify(latestResponse.content, bigIntReplacer);
+              console.log('Latest response:', latestResponse);
               
-              console.log('Latest response content:', responseContent);
+              // Get the content as a string
+              let responseContent;
+              try {
+                responseContent = typeof latestResponse.content === 'string' 
+                  ? latestResponse.content 
+                  : JSON.stringify(latestResponse.content, bigIntReplacer);
+                
+                console.log('Latest response content:', responseContent);
+              } catch (e) {
+                console.log('Error getting response content:', e);
+                responseContent = '';
+              }
               
               // Try to parse the message as JSON
               try {
@@ -366,7 +384,19 @@ const StudyPage: React.FC = () => {
                   return;
                 }
               } catch (e) {
-                console.log('Bot response is not valid JSON:', responseContent);
+                console.log('Bot response is not valid JSON, using as plain text:', responseContent);
+                
+                // If it's not JSON, try to extract information from the text
+                // This is a fallback for plain text responses
+                const isCorrect = responseContent.toLowerCase().includes('correct');
+                
+                resolve({
+                  uuid: questionRequest.uuid,
+                  answer: questionRequest.selectedAnswer,
+                  explanation: responseContent || 'No explanation provided',
+                  isCorrect
+                });
+                return;
               }
             }
             
@@ -399,25 +429,19 @@ const StudyPage: React.FC = () => {
     }
     
     // Determine if this is an IPFS CID or a local file
-    const isIpfsCid = src.startsWith('Qm') || src.startsWith('bafy') || src.startsWith('bafk');
-    let audioSrc = src;
+    const audioSrc = src.startsWith('/') 
+      ? src // Local file path
+      : `/ipfs/${src}`; // IPFS CID
     
-    if (isIpfsCid) {
-      // Use the premium AIOZ gateway for IPFS content
-      audioSrc = `https://premium.aiozpin.network/ipfs/${src}`;
-      console.log('Using IPFS gateway for audio:', audioSrc);
-    }
+    audioRef.current.src = audioSrc;
     
-    console.log('Playing audio from:', audioSrc);
-    
-    // Set up event handlers
-    audioRef.current.oncanplaythrough = () => {
+    // Set up event listeners
+    audioRef.current.onloadeddata = () => {
       setIsAudioLoading(false);
       setIsAudioPlaying(true);
-      audioRef.current?.play().catch(err => {
-        console.error('Failed to play audio:', err);
+      audioRef.current?.play().catch(error => {
+        console.error('Error playing audio:', error);
         setIsAudioPlaying(false);
-        setIsAudioFinished(true);
         setIsAudioLoading(false);
       });
     };
@@ -429,24 +453,12 @@ const StudyPage: React.FC = () => {
     };
     
     audioRef.current.onerror = (e) => {
-      console.error('Audio playback error:', e);
-      console.error('Audio error details:', audioRef.current?.error);
-      
-      // Try an alternative gateway if the first one fails
-      if (isIpfsCid && audioRef.current?.src.includes('premium.aiozpin.network')) {
-        console.log('Trying alternative IPFS gateway...');
-        audioRef.current.src = `https://ipfs.io/ipfs/${src}`;
-        audioRef.current.load();
-        return;
-      }
-      
-      setIsAudioPlaying(false);
-      setIsAudioFinished(true);
+      console.error('Audio error:', e);
       setIsAudioLoading(false);
+      setIsAudioPlaying(false);
     };
     
-    // Set the source and load the audio
-    audioRef.current.src = audioSrc;
+    // Load the audio
     audioRef.current.load();
   };
   
@@ -485,6 +497,7 @@ const StudyPage: React.FC = () => {
   
   // Add function to toggle study language
   const toggleStudyLanguage = () => {
+    // Toggle between English and Chinese
     const newLanguage = studyLanguage === 'en' ? 'zh' : 'en';
     setStudyLanguage(newLanguage);
   };
@@ -494,39 +507,57 @@ const StudyPage: React.FC = () => {
   
   if (loading) {
     return (
-      <div className="flex justify-center py-12">
-        <Spinner size="lg" color="primary" />
+      <div className="container mx-auto px-4 py-6">
+        <PageHeader
+          leftIcon={<CaretLeft size={24} />}
+          leftLink={`/song/${title}`}
+          title={t('study.title')}
+        />
+        <div className="flex flex-col items-center justify-center py-12">
+          <Spinner size="lg" color="primary" />
+          <p className="mt-4 text-neutral-400">{t('common.loading')}</p>
+        </div>
       </div>
     );
   }
   
-  if (error || !song) {
+  if (error || !song || !currentQuestion) {
     return (
-      <div className="bg-neutral-800 text-red-400 p-6 rounded-lg text-center border border-red-900/30">
+      <div className="container mx-auto px-4 py-6">
+        <PageHeader
+          leftIcon={<CaretLeft size={24} />}
+          leftLink={`/song/${title}`}
+          title={t('study.title')}
+        />
+        <div className="bg-red-900/20 text-red-400 p-6 rounded-lg text-center">
+          <X size={48} weight="bold" className="mx-auto mb-2" />
         <h2 className="text-xl font-bold mb-2">{t('common.error')}</h2>
-        <p>{error?.message || t('questions.notFound')}</p>
+          <p>{songError?.message || questionsError?.message || t('study.noQuestions')}</p>
+          <Link to={`/song/${title}`} className="mt-4 inline-block text-indigo-400">
+            {t('common.goBack')}
+          </Link>
       </div>
-    );
-  }
-  
-  if (!currentQuestion) {
-    return (
-      <div className="bg-neutral-800 text-yellow-400 p-6 rounded-lg text-center border border-yellow-900/30">
-        <h2 className="text-xl font-bold mb-2">{t('questions.noQuestions')}</h2>
-        <p>{t('questions.noQuestionsExplanation')}</p>
       </div>
     );
   }
   
   return (
-    <div className="flex-1 flex flex-col relative px-4 py-6 pb-24">
-      {/* Use PageHeader component */}
+    <div className="container mx-auto px-4 py-6">
+      {/* Page header with back button */}
       <PageHeader
-        leftIcon={<X size={24} />}
+        leftIcon={<CaretLeft size={24} />}
         leftLink={`/song/${title}`}
-        progressPercent={((currentIndex + 1) / totalQuestions) * 100}
+        title={t('study.title')}
       />
-
+      
+      {/* XMTP Connection Status */}
+      {!isXmtpReady && (
+        <div className="mb-4 bg-yellow-900/20 text-yellow-400 p-3 rounded-lg flex items-center">
+          <Spinner size="sm" color="primary" className="mr-2" />
+          <span>{t('study.xmtpConnecting')}</span>
+        </div>
+      )}
+      
       {/* Language Selector */}
       <div className="mb-4 flex justify-end">
         <button 
@@ -538,143 +569,103 @@ const StudyPage: React.FC = () => {
         </button>
       </div>
       
-      {/* XMTP Connection Status */}
-      {!isXmtpReady && (
-        <div className="bg-blue-900/20 text-blue-400 p-3 rounded-lg mb-4 flex items-center justify-center gap-2">
-          <Spinner size="sm" color="primary" />
-          <span>Connecting to messaging service...</span>
-        </div>
-      )}
-
-      <div className="flex-1 flex flex-col">
-        {/* Main content area with fixed heights to prevent layout shifts */}
-        <div className="grid gap-4">
-          {/* Top section with avatar, question and feedback */}
-          <div className="grid md:grid-cols-[auto_1fr] gap-4">
-            {/* Avatar - centered on mobile, left on desktop */}
-            <div className="flex justify-center md:block md:pr-4">
-              <div className="w-24 h-24 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center">
-                <img 
-                  src="/images/scarlett-peace.png" 
-                  alt="Scarlett" 
-                  className="w-20 h-20 object-cover"
-                  onError={(e) => {
-                    // Fallback to User icon if image fails to load
-                    e.currentTarget.style.display = 'none';
-                    e.currentTarget.parentElement?.classList.add('flex', 'items-center', 'justify-center');
-                    const icon = document.createElement('div');
-                    icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="currentColor" viewBox="0 0 256 256"><path d="M230.92,212c-15.23-26.33-38.7-45.21-66.09-54.16a72,72,0,1,0-73.66,0C63.78,166.78,40.31,185.66,25.08,212a8,8,0,1,0,13.85,8c18.84-32.56,52.14-52,89.07-52s70.23,19.44,89.07,52a8,8,0,1,0,13.85-8ZM72,96a56,56,0,1,1,56,56A56.06,56.06,0,0,1,72,96Z"></path></svg>';
-                    e.currentTarget.parentElement?.appendChild(icon);
-                  }}
-                />
+      {/* Question card */}
+      <div className="bg-neutral-800 rounded-lg border border-neutral-700 p-5 mb-6">
+        <div className="flex justify-between items-center mb-4">
+          <h3 className="text-lg font-bold">{t('study.question')} {currentIndex + 1}/{totalQuestions}</h3>
+          <span className="text-sm text-neutral-400">{studyLanguage === 'en' ? 'English' : '中文'}</span>
             </div>
+        
+        <p className="text-lg mb-6">{currentQuestion.question}</p>
+        
+        <div className="space-y-3">
+          {['a', 'b', 'c', 'd'].map((option) => (
+            <button
+              key={option}
+              onClick={() => handleAnswerSelect(option as 'a' | 'b' | 'c' | 'd')}
+              disabled={!!selectedAnswer || isValidating || !isXmtpReady}
+              className={`w-full text-left p-3 rounded-lg flex items-start transition-colors ${
+                selectedAnswer === option
+                  ? currentQuestion.userAnswer === option && currentQuestion.isCorrect
+                    ? 'bg-green-900/30 border border-green-700'
+                    : currentQuestion.userAnswer === option
+                    ? 'bg-red-900/30 border border-red-700'
+                    : 'bg-indigo-900/30 border border-indigo-700'
+                  : 'bg-neutral-700 hover:bg-neutral-600'
+              } ${!!selectedAnswer || isValidating || !isXmtpReady ? 'opacity-70 cursor-not-allowed' : ''}`}
+            >
+              <span className="inline-block w-6 h-6 rounded-full bg-neutral-600 text-center mr-3 flex-shrink-0">
+                {option}
+              </span>
+              <span>{currentQuestion.options[option as keyof typeof currentQuestion.options]}</span>
+              </button>
+          ))}
+            </div>
+        
+        {/* Feedback message */}
+        {feedback && (
+          <div className={`mt-6 p-4 rounded-lg ${
+            isValidating 
+              ? 'bg-neutral-700/50 border border-neutral-600' 
+              : feedback.isCorrect
+              ? 'bg-green-900/30 border border-green-700'
+              : 'bg-red-900/30 border border-red-700'
+          }`}>
+            <p className="font-medium mb-2">
+              {isValidating 
+                ? t('study.checking') 
+                : feedback.isCorrect 
+                ? t('study.correct') 
+                : t('study.incorrect')}
+            </p>
+            <p className="text-neutral-300">{feedback.explanation}</p>
+          </div>
+        )}
           </div>
           
-            {/* Messages Container */}
-            <div className="flex flex-col gap-4">
-              {/* Question Message */}
-              <div className="p-4 rounded-lg bg-neutral-800 border border-neutral-700">
-                <p className="text-white">{currentQuestion.question}</p>
-              </div>
-              
-              {/* Feedback Message Container - Fixed height container */}
-              <div className="min-h-[100px] relative">
-                {/* Actual feedback content */}
-                {feedback && (
-                  <div className={`p-4 rounded-lg ${
-                    isValidating 
-                      ? 'bg-blue-900/20 text-blue-400 border border-blue-800/30'
-                      : feedback.isCorrect 
-                        ? 'bg-green-900/20 text-green-400 border border-green-800/30' 
-                        : 'bg-red-900/20 text-red-400 border border-red-800/30'
-                  }`}>
-                    {/* Explanation text with padding to avoid button overlap */}
-                    <div className="pr-12">
-                      {!isValidating && (
-                <p className="font-medium mb-1">
-                  {feedback.isCorrect ? t('questions.correct') : t('questions.incorrect')}
-                </p>
-                      )}
-                      <p>{feedback.explanation}</p>
-                    </div>
-                    
-                    {/* Audio button positioned at bottom right */}
-                    {(feedback.audioCid || feedback.isCorrect) && !isValidating && (
-                      <div className="absolute bottom-3 right-3">
-                        <button
-                          onClick={handleToggleAudio}
-                          disabled={isAudioLoading}
-                          className="p-1 rounded-full bg-neutral-700 hover:bg-neutral-600 transition-colors w-8 h-8 flex items-center justify-center"
-                          aria-label={isAudioPlaying ? "Pause audio" : "Play audio"}
-                        >
-                          {isAudioLoading ? (
-                            <Spinner size="sm" color="white" className="h-4 w-4" />
-                          ) : isAudioPlaying ? (
-                            <Pause size={16} weight="fill" className="text-white" />
-                          ) : (
-                            <Play size={16} weight="fill" className="text-white" />
-                          )}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
+      {/* Navigation buttons */}
+      <div className="flex justify-between">
+        <div>
+          {/* Audio button - only show if feedback with audio is available */}
+          {feedback && feedback.audioCid && (
+            <button
+              onClick={handleToggleAudio}
+              disabled={isAudioLoading}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
+                isAudioPlaying
+                  ? 'bg-indigo-700 text-white'
+                  : 'bg-neutral-800 text-white hover:bg-neutral-700'
+              } ${isAudioLoading ? 'opacity-50 cursor-wait' : ''}`}
+            >
+              {isAudioLoading ? (
+                <Spinner size="sm" color="white" />
+              ) : isAudioPlaying ? (
+                <Pause size={20} weight="fill" />
+              ) : (
+                <Play size={20} weight="fill" />
+              )}
+              {isAudioLoading
+                ? t('study.loadingAudio')
+                : isAudioPlaying
+                ? t('study.pauseAudio')
+                : isAudioFinished
+                ? t('study.replayAudio')
+                : t('study.playAudio')}
+            </button>
+          )}
         </div>
         
-          {/* Answer Options */}
-          <div className="space-y-3 mt-4">
-            {(['a', 'b', 'c', 'd'] as const).map((option) => (
               <button
-                key={option}
-                className={`w-full p-3 rounded-lg border text-left flex items-center ${
-                  selectedAnswer === option
-                    ? feedback?.isCorrect
-                      ? 'bg-green-900/20 border-green-700 text-green-400'
-                      : 'bg-red-900/20 border-red-700 text-red-400'
-                    : 'border-neutral-700 hover:border-indigo-700 hover:bg-indigo-900/20'
-                }`}
-                onClick={() => handleAnswerSelect(option)}
-                disabled={!!selectedAnswer || isValidating || !isXmtpReady}
-              >
-                <span className="inline-block w-6 h-6 rounded-full bg-neutral-700 text-center mr-3">
-                  {option.toUpperCase()}
-                </span>
-                <span>{currentQuestion.options[option]}</span>
-                {isValidating && selectedAnswer === option && (
-                  <Spinner size="sm" color="primary" className="ml-2" />
-                )}
+          onClick={goToNextQuestion}
+          disabled={!selectedAnswer || isValidating}
+          className={`flex items-center gap-2 px-6 py-2 rounded-lg bg-indigo-600 text-white ${
+            !selectedAnswer || isValidating ? 'opacity-50 cursor-not-allowed' : 'hover:bg-indigo-700'
+          }`}
+        >
+          {currentIndex === totalQuestions - 1 ? t('study.finish') : t('study.next')}
+          <ArrowRight size={20} weight="bold" />
               </button>
-            ))}
-          </div>
-        </div>
       </div>
-      
-      {/* Next button - fixed at bottom */}
-      {feedback && !isValidating && (
-        <div className="fixed bottom-0 left-0 right-0 bg-neutral-900 border-t border-neutral-800 p-4">
-          <div className="container mx-auto px-4">
-      <button
-              className="w-full py-3 rounded-lg flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white"
-              onClick={() => goToNextQuestion()}
-            >
-              {currentIndex >= totalQuestions - 1 ? (
-                <div className="flex items-center justify-center gap-2">
-                  {t('questions.complete')} <ArrowRight size={16} weight="bold" />
-                </div>
-              ) : (
-                <div className="flex items-center justify-center gap-2">
-                  {t('questions.nextQuestion')} <ArrowRight size={16} weight="bold" />
-                </div>
-              )}
-      </button>
-          </div>
-        </div>
-      )}
-      
-      {/* Hidden audio element for playing sounds */}
-      <audio ref={audioRef} className="hidden" />
     </div>
   );
 };

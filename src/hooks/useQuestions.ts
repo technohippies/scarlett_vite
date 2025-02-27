@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Question, QuestionWithResponse } from '../types/song';
 import { fetchQuestionsByCid } from '../lib/ipfs/content';
 
-export function useQuestions(questionsCid: string | undefined, language: 'en' | 'zh') {
+export function useQuestions(questionsCid: string | undefined) {
   const [questions, setQuestions] = useState<QuestionWithResponse[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<Error | null>(null);

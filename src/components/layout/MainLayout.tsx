@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { GlobeSimple, SignIn, SignOut, Wallet } from '@phosphor-icons/react';
 import { useTranslation } from 'react-i18next';
 import { useAppKit } from '../../context/ReownContext';
+import XmtpStatusBanner from '../XmtpStatusBanner';
+import { useXmtp } from '../../context/XmtpContext';
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -12,6 +14,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, hideHeader = false })
   const { t, i18n } = useTranslation();
   const currentLanguage = i18n.language;
   const appKit = useAppKit();
+  const xmtp = useXmtp();
   const [isConnected, setIsConnected] = useState(false);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   
@@ -157,6 +160,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, hideHeader = false })
     }
   };
   
+  // Determine if we should show the XMTP status banner
+  // Only show on pages where messaging is relevant and when wallet is connected
+  const shouldShowXmtpBanner = isConnected && !xmtp?.isConnected;
+  
   return (
     <div className="min-h-screen flex flex-col bg-neutral-900 text-white">
       {/* Header - can be hidden */}
@@ -202,6 +209,9 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, hideHeader = false })
           </div>
         </header>
       )}
+      
+      {/* XMTP Status Banner */}
+      {shouldShowXmtpBanner && <XmtpStatusBanner />}
       
       {/* Main content */}
       <main className="flex-1 flex flex-col relative">

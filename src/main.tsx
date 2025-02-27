@@ -4,13 +4,13 @@ import './index.css'
 import App from './App.tsx'
 import ReownProvider from './context/ReownContext'
 import XmtpProvider from './context/XmtpContext'
-import initXmtpEnvironment, { preloadProtobufjs } from './utils/xmtpHelper'
+import initXmtpEnvironment from './utils/xmtpHelper'
 
 // Initialize XMTP environment
 initXmtpEnvironment();
 
-// Preload protobufjs
-preloadProtobufjs().catch(console.error);
+// Preload protobufjs is now called inside initXmtpEnvironment
+// No need to call it separately
 
 // Ensure Buffer is available
 if (typeof window !== 'undefined' && typeof window.Buffer === 'undefined') {

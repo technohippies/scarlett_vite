@@ -26,6 +26,7 @@ export interface XmtpContextType {
   conversations: Conversation[];
   isConnected: boolean;
   isConnecting: boolean;
+  connectionError: Error | null;
   connectXmtp: (signer: any) => Promise<void>;
   connectWithWagmi: () => Promise<boolean>;
   connectWithEthers: () => Promise<boolean>;
