@@ -109,8 +109,6 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     checkAppKitAndConnectXmtp();
   }, [appKit, isConnected, isConnecting]);
 
-
-
   // Helper function to create a signer
   const createSigner = (address: string, provider: any) => {
     return {
@@ -125,10 +123,76 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
           console.log('Message to sign:', message);
           console.log('Address used for signing:', address);
           
-          const signature = await provider.request({
-            method: 'personal_sign',
-            params: [message, address]
-          });
+          // Ensure provider is connected first
+          if (provider.connect && typeof provider.connect === 'function') {
+            try {
+              console.log('Connecting to provider before signing...');
+              await provider.connect();
+              console.log('Provider connected successfully');
+            } catch (connectError) {
+              console.warn('Could not connect to provider:', connectError);
+              // Continue anyway, as some providers might not need explicit connection
+            }
+          }
+          
+          // Try different signing methods
+          let signature;
+          try {
+            // Method 1: personal_sign with original message
+            console.log('Attempting personal_sign...');
+            signature = await provider.request({
+              method: 'personal_sign',
+              params: [message, address]
+            });
+          } catch (error) {
+            console.error('Error with personal_sign, trying eth_sign:', error);
+            
+            try {
+              // Method 2: eth_sign
+              console.log('Attempting eth_sign...');
+              signature = await provider.request({
+                method: 'eth_sign',
+                params: [address, message]
+              });
+            } catch (secondError) {
+              console.error('Error with eth_sign, trying signMessage:', secondError);
+              
+              // Method 3: Try provider.signMessage if available
+              if (provider.signMessage) {
+                console.log('Attempting provider.signMessage...');
+                signature = await provider.signMessage(message);
+              } else if (typeof window !== 'undefined' && window.ethereum) {
+                // Method 4: Try window.ethereum as fallback
+                console.log('Attempting window.ethereum.request...');
+                try {
+                  signature = await (window.ethereum as any).request({
+                    method: 'personal_sign',
+                    params: [message, address]
+                  });
+                } catch (ethereumError) {
+                  console.error('Error with window.ethereum.request:', ethereumError);
+                  
+                  // Method 5: Try ethers.js if available
+                  if (typeof window !== 'undefined' && (window as any).ethers) {
+                    console.log('Attempting ethers.js signing...');
+                    try {
+                      const ethers = (window as any).ethers;
+                      const ethersProvider = new ethers.providers.Web3Provider(window.ethereum as any);
+                      const ethersSigner = ethersProvider.getSigner(address);
+                      signature = await ethersSigner.signMessage(message);
+                    } catch (ethersError) {
+                      console.error('Error with ethers.js signing:', ethersError);
+                      throw new Error('All signing methods failed');
+                    }
+                  } else {
+                    throw new Error('All signing methods failed');
+                  }
+                }
+              } else {
+                throw new Error('All signing methods failed');
+              }
+            }
+          }
           
           console.log('Message signed successfully:', signature);
           return signature;
@@ -172,12 +236,52 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       console.log('XMTP Client object available:', !!Client);
       console.log('XMTP Client.create method available:', !!(Client && typeof Client.create === 'function'));
       
+      // Generate a random 32-byte encryption key for the local database
+      // This should ideally be stored securely and reused for the same user
+      const generateEncryptionKey = () => {
+        // Create a new 32-byte array with random values
+        return window.crypto.getRandomValues(new Uint8Array(32));
+      };
+      
+      // Get or create encryption key
+      // In a production app, you would want to store this key securely
+      // and retrieve it for returning users
+      const getEncryptionKey = (address: string) => {
+        const storageKey = `xmtp-key-${address.toLowerCase()}`;
+        let keyData = localStorage.getItem(storageKey);
+        
+        if (!keyData) {
+          // No key found, generate a new one
+          const newKey = generateEncryptionKey();
+          // Convert to base64 for storage
+          keyData = btoa(String.fromCharCode.apply(null, Array.from(newKey)));
+          localStorage.setItem(storageKey, keyData);
+          console.log('Generated and stored new encryption key');
+        } else {
+          console.log('Using existing encryption key from storage');
+        }
+        
+        // Convert from base64 back to Uint8Array
+        const keyBytes = Uint8Array.from(atob(keyData), c => c.charCodeAt(0));
+        console.log('Encryption key byte length:', keyBytes.length);
+        return keyBytes;
+      };
+      
+      // Get encryption key for this user
+      const encryptionKey = getEncryptionKey(address);
+      console.log('Using encryption key for database:', !!encryptionKey);
+      
+      // Verify the encryption key is valid
+      if (!encryptionKey || encryptionKey.length !== 32) {
+        console.error('Invalid encryption key length:', encryptionKey ? encryptionKey.length : 'null');
+        throw new Error('Invalid encryption key: must be exactly 32 bytes');
+      }
+      
       try {
         console.log('Attempting to create XMTP client with production environment...');
         
-        // Use Client.create directly with production environment
-        // @ts-ignore - Ignoring type errors for now to get it working
-        const xmtpClient = await Client.create(signer, { env: 'production' });
+        // Use Client.create with encryption key and production environment
+        const xmtpClient = await Client.create(signer, encryptionKey, { env: 'production' });
         console.log('XMTP client created successfully:', !!xmtpClient);
         
         setClient(xmtpClient);
@@ -191,8 +295,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         // Try with dev environment as fallback
         try {
           console.log('Attempting to create XMTP client with dev environment...');
-          // @ts-ignore - Ignoring type errors for now to get it working
-          const xmtpClient = await Client.create(signer, { env: 'dev' });
+          const xmtpClient = await Client.create(signer, encryptionKey, { env: 'dev' });
           console.log('XMTP client created successfully with dev environment:', !!xmtpClient);
           
           setClient(xmtpClient);

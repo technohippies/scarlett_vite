@@ -429,16 +429,6 @@ const HomePage: React.FC = () => {
                           if (!provider && appKit.universalProvider) {
                             provider = appKit.universalProvider;
                             console.log('Direct XMTP connect: Using universal provider:', provider);
-                            
-                            // Connect to the universal provider before making requests
-                            try {
-                              console.log('Connecting to universal provider...');
-                              await provider.connect();
-                              console.log('Connected to universal provider');
-                            } catch (error) {
-                              console.error('Error connecting to universal provider:', error);
-                              // Continue anyway, as we might be able to use it without connecting
-                            }
                           }
                           
                           // Fallback to window.ethereum if no provider is available
@@ -453,7 +443,7 @@ const HomePage: React.FC = () => {
                             return;
                           }
                           
-                          // Create signer
+                          // Create signer with improved signing
                           const signer = {
                             walletType: "SCW" as const,
                             getAddress: async () => address,
@@ -462,11 +452,56 @@ const HomePage: React.FC = () => {
                                 console.log('Direct XMTP connect: Signing message:', message);
                                 console.log('Direct XMTP connect: Using address for signing:', address);
                                 
-                                // Try to sign with the provider
-                                const signature = await provider.request({
-                                  method: 'personal_sign',
-                                  params: [message, address]
-                                });
+                                // Convert message to hex if it's not already
+                                let messageToSign = message;
+                                if (typeof message === 'string' && !message.startsWith('0x')) {
+                                  // Use TextEncoder to properly encode the message
+                                  const encoder = new TextEncoder();
+                                  const messageUint8 = encoder.encode(message);
+                                  messageToSign = '0x' + Array.from(messageUint8)
+                                    .map(b => b.toString(16).padStart(2, '0'))
+                                    .join('');
+                                  console.log('Direct XMTP connect: Converted message to hex:', messageToSign);
+                                }
+                                
+                                // Try different signing methods
+                                let signature;
+                                try {
+                                  // Method 1: personal_sign with original message
+                                  signature = await provider.request({
+                                    method: 'personal_sign',
+                                    params: [message, address]
+                                  });
+                                } catch (error) {
+                                  console.error('Error with personal_sign, trying with hex message:', error);
+                                  
+                                  try {
+                                    // Method 2: personal_sign with hex message
+                                    signature = await provider.request({
+                                      method: 'personal_sign',
+                                      params: [messageToSign, address]
+                                    });
+                                  } catch (secondError) {
+                                    console.error('Error with personal_sign hex, trying eth_sign:', secondError);
+                                    
+                                    try {
+                                      // Method 3: eth_sign
+                                      signature = await provider.request({
+                                        method: 'eth_sign',
+                                        params: [address, messageToSign]
+                                      });
+                                    } catch (thirdError) {
+                                      console.error('Error with eth_sign, trying signMessage:', thirdError);
+                                      
+                                      // Method 4: Try provider.signMessage if available
+                                      if (provider.signMessage) {
+                                        signature = await provider.signMessage(message);
+                                      } else {
+                                        throw new Error('All signing methods failed');
+                                      }
+                                    }
+                                  }
+                                }
                                 
                                 console.log('Direct XMTP connect: Signature:', signature);
                                 return signature;
