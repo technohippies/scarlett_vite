@@ -61,7 +61,7 @@ const SongPage: React.FC = () => {
       {/* Action buttons */}
       <div className="flex mb-8 gap-4">
         <Link 
-          to={`/song/${song.song_title}/play`}
+          to={`/song/${song.song_title.toLowerCase().replace(/\s+/g, '-')}/play`}
           className="flex-1 bg-indigo-600 text-white rounded-full py-3 flex items-center justify-center gap-2 font-medium"
         >
           <Play size={20} weight="fill" />
@@ -69,7 +69,7 @@ const SongPage: React.FC = () => {
         </Link>
         
         <Link 
-          to={`/song/${song.song_title}/study`}
+          to={`/song/${song.song_title.toLowerCase().replace(/\s+/g, '-')}/study`}
           className="flex-1 bg-neutral-800 border border-neutral-700 text-white rounded-full py-3 flex items-center justify-center gap-2 font-medium"
         >
           <BookOpen size={20} weight="bold" />

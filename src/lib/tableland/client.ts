@@ -56,9 +56,16 @@ export async function getSongById(id: number): Promise<Song | null> {
  */
 export async function getSongByTitle(title: string): Promise<Song | null> {
   try {
+    // Convert kebab-case to original format if needed
+    const formattedTitle = title.includes('-') 
+      ? title.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
+      : title;
+    
+    console.log(`Looking up song with title: ${formattedTitle} (from URL: ${title})`);
+    
     const response = await fetch(
       `${TABLELAND_API_URL}?statement=${encodeURIComponent(
-        `SELECT * FROM ${SONG_TABLE} WHERE song_title = '${title}'`
+        `SELECT * FROM ${SONG_TABLE} WHERE song_title = '${formattedTitle}'`
       )}`
     );
     

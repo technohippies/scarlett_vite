@@ -570,7 +570,7 @@ const HomePage: React.FC = () => {
             {songs.slice(0, 3).map((song) => (
               <Link 
                 key={song.id} 
-                to={`/song/${song.song_title}`}
+                to={`/song/${song.song_title.toLowerCase().replace(/\s+/g, '-')}`}
                 className="flex flex-col items-center"
               >
                 <div className="w-full aspect-square rounded-lg overflow-hidden mb-2">
