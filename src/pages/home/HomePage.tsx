@@ -6,6 +6,7 @@ import { ArrowRight } from '@phosphor-icons/react';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
 import { useAppKit } from '../../context/ReownContext';
 import { useXmtp } from '../../context/XmtpContext';
+import XmtpConnectButton from '../../components/XmtpConnectButton';
 
 // Mock chat messages for demonstration
 const MOCK_CHAT_MESSAGES = [
@@ -391,154 +392,17 @@ const HomePage: React.FC = () => {
                 <p className="text-neutral-400 mb-4 text-center">{t('chat.connectXmtp')}</p>
                 {appKit && typeof appKit.getAddress === 'function' ? (
                   <div className="flex flex-col gap-3 items-center">
-                    <button 
-                      onClick={handleConnectWallet}
-                      className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-                    >
-                      {t('common.connect')}
-                    </button>
-                    <button 
-                      onClick={async () => {
-                        try {
-                          // Check if we already have an address
-                          let address;
-                          try {
-                            address = await appKit.getAddress();
-                            console.log('Direct XMTP connect: Got address:', address);
-                          } catch (error) {
-                            console.error('Direct XMTP connect: Error getting address:', error);
-                            alert('Please connect your wallet first');
-                            return;
-                          }
-                          
-                          if (!address) {
-                            console.error('Direct XMTP connect: No address available');
-                            alert('Please connect your wallet first');
-                            return;
-                          }
-                          
-                          // Get provider
-                          let provider;
-                          try {
-                            provider = await appKit.getProvider();
-                            console.log('Direct XMTP connect: Got provider:', provider);
-                          } catch (error) {
-                            console.error('Direct XMTP connect: Error getting provider:', error);
-                          }
-                          
-                          if (!provider && appKit.universalProvider) {
-                            provider = appKit.universalProvider;
-                            console.log('Direct XMTP connect: Using universal provider:', provider);
-                          }
-                          
-                          // Fallback to window.ethereum if no provider is available
-                          if (!provider && typeof window !== 'undefined' && window.ethereum) {
-                            provider = window.ethereum;
-                            console.log('Direct XMTP connect: Falling back to window.ethereum:', provider);
-                          }
-                          
-                          if (!provider) {
-                            console.error('Direct XMTP connect: No provider available');
-                            alert('Failed to get provider');
-                            return;
-                          }
-                          
-                          // Create signer with improved signing
-                          const signer = {
-                            walletType: "SCW" as const,
-                            getAddress: async () => address,
-                            signMessage: async (message: string) => {
-                              try {
-                                console.log('Direct XMTP connect: Signing message:', message);
-                                console.log('Direct XMTP connect: Using address for signing:', address);
-                                
-                                // Convert message to hex if it's not already
-                                let messageToSign = message;
-                                if (typeof message === 'string' && !message.startsWith('0x')) {
-                                  // Use TextEncoder to properly encode the message
-                                  const encoder = new TextEncoder();
-                                  const messageUint8 = encoder.encode(message);
-                                  messageToSign = '0x' + Array.from(messageUint8)
-                                    .map(b => b.toString(16).padStart(2, '0'))
-                                    .join('');
-                                  console.log('Direct XMTP connect: Converted message to hex:', messageToSign);
-                                }
-                                
-                                // Try different signing methods
-                                let signature;
-                                try {
-                                  // Method 1: personal_sign with original message
-                                  signature = await provider.request({
-                                    method: 'personal_sign',
-                                    params: [message, address]
-                                  });
-                                } catch (error) {
-                                  console.error('Error with personal_sign, trying with hex message:', error);
-                                  
-                                  try {
-                                    // Method 2: personal_sign with hex message
-                                    signature = await provider.request({
-                                      method: 'personal_sign',
-                                      params: [messageToSign, address]
-                                    });
-                                  } catch (secondError) {
-                                    console.error('Error with personal_sign hex, trying eth_sign:', secondError);
-                                    
-                                    try {
-                                      // Method 3: eth_sign
-                                      signature = await provider.request({
-                                        method: 'eth_sign',
-                                        params: [address, messageToSign]
-                                      });
-                                    } catch (thirdError) {
-                                      console.error('Error with eth_sign, trying signMessage:', thirdError);
-                                      
-                                      // Method 4: Try provider.signMessage if available
-                                      if (provider.signMessage) {
-                                        signature = await provider.signMessage(message);
-                                      } else {
-                                        throw new Error('All signing methods failed');
-                                      }
-                                    }
-                                  }
-                                }
-                                
-                                console.log('Direct XMTP connect: Signature:', signature);
-                                return signature;
-                              } catch (error) {
-                                console.error('Direct XMTP connect: Error signing message:', error);
-                                throw error;
-                              }
-                            },
-                            getChainId: () => BigInt(84532), // Base Sepolia testnet
-                            getBlockNumber: () => BigInt(0) // Return BigInt(0) instead of undefined
-                          };
-                          
-                          // Connect to XMTP
-                          if (xmtp) {
-                            console.log('Direct XMTP connect: Connecting to XMTP...');
-                            await xmtp.connectXmtp(signer);
-                            console.log('Direct XMTP connect: Connected to XMTP');
-                          } else {
-                            console.error('Direct XMTP connect: XMTP context not available');
-                            alert('XMTP service is not available');
-                          }
-                        } catch (error) {
-                          console.error('Direct XMTP connect: Error:', error);
-                          alert('Error connecting to XMTP: ' + ((error as Error).message || 'Unknown error'));
-                        }
-                      }}
-                      className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
-                    >
-                      Connect to XMTP directly
-                    </button>
+                    <XmtpConnectButton />
+                    <p className="text-xs text-neutral-500 text-center max-w-xs">
+                      {t('chat.xmtpExplanation')}
+                    </p>
                   </div>
                 ) : (
                   <button 
                     onClick={handleConnectWallet}
                     className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium"
                   >
-                    {t('common.connect')}
+                    {t('common.connectWallet')}
                   </button>
                 )}
               </div>

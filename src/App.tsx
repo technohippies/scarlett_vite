@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import './App.css';
 import MainLayout from './components/layout/MainLayout';
 import './lib/i18n';
-import XmtpProvider from './context/XmtpContext';
 
 // Lazy-loaded components
 const HomePage = lazy(() => import('./pages/home/HomePage'));
@@ -66,18 +65,16 @@ function App() {
   return (
     <Suspense fallback={<Loader />}>
       <Router>
-        <XmtpProvider>
-          <ReownInitializer />
-          <Routes>
-            <Route path="/" element={<MainLayout><HomePage /></MainLayout>} />
-            <Route path="/songs" element={<MainLayout><HomePage /></MainLayout>} />
-            <Route path="/song/:title" element={<MainLayout><SongPage /></MainLayout>} />
-            <Route path="/song/:title/play" element={<MainLayout><PlayPage /></MainLayout>} />
-            <Route path="/song/:title/study" element={<MainLayout><StudyPage /></MainLayout>} />
-            <Route path="/song/:title/complete" element={<MainLayout><CompletePage /></MainLayout>} />
-            <Route path="/chat" element={<MainLayout><ChatPage /></MainLayout>} />
-          </Routes>
-        </XmtpProvider>
+        <ReownInitializer />
+        <Routes>
+          <Route path="/" element={<MainLayout><HomePage /></MainLayout>} />
+          <Route path="/songs" element={<MainLayout><HomePage /></MainLayout>} />
+          <Route path="/song/:title" element={<MainLayout><SongPage /></MainLayout>} />
+          <Route path="/song/:title/play" element={<MainLayout><PlayPage /></MainLayout>} />
+          <Route path="/song/:title/study" element={<MainLayout><StudyPage /></MainLayout>} />
+          <Route path="/song/:title/complete" element={<MainLayout><CompletePage /></MainLayout>} />
+          <Route path="/chat" element={<MainLayout><ChatPage /></MainLayout>} />
+        </Routes>
       </Router>
     </Suspense>
   );
