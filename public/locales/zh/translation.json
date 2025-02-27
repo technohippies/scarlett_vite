@@ -45,6 +45,12 @@
     "contentRating": "内容分级",
     "notFound": "未找到歌曲"
   },
+  "study": {
+    "title": "学习",
+    "xmtpConnecting": "正在连接消息服务...",
+    "next": "下一题",
+    "finish": "完成"
+  },
   "chat": {
     "placeholder": "输入消息...",
     "send": "发送",

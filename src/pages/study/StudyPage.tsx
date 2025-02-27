@@ -3,12 +3,11 @@ import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { useQuestions } from '../../hooks/useQuestions';
-import { Play, Pause, ArrowRight, X, GlobeSimple, CaretLeft } from '@phosphor-icons/react';
+import { Play, Pause, ArrowRight, X, CaretLeft } from '@phosphor-icons/react';
 import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
 import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
-import { ipfsCidToUrl } from '../../lib/tableland/client';
 
 // Interface for the question answer JSON sent to XMTP
 interface QuestionAnswerRequest {
@@ -431,22 +430,35 @@ const StudyPage: React.FC = () => {
     // Determine if this is an IPFS CID or a local file
     const audioSrc = src.startsWith('/') 
       ? src // Local file path
-      : `/ipfs/${src}`; // IPFS CID
+      : `https://premium.aiozpin.network/ipfs/${src}`; // Use premium AIOZ IPFS gateway
     
+    console.log('Loading audio from:', audioSrc);
     audioRef.current.src = audioSrc;
     
     // Set up event listeners
     audioRef.current.onloadeddata = () => {
+      console.log('Audio loaded successfully');
       setIsAudioLoading(false);
       setIsAudioPlaying(true);
       audioRef.current?.play().catch(error => {
-        console.error('Error playing audio:', error);
+        console.error('Error playing audio after load:', error);
         setIsAudioPlaying(false);
         setIsAudioLoading(false);
+        
+        // Try fallback gateway if premium gateway fails
+        if (!src.startsWith('/') && !audioSrc.includes('ipfs.io')) {
+          console.log('Trying fallback IPFS gateway');
+          const fallbackSrc = `https://ipfs.io/ipfs/${src}`;
+          if (audioRef.current) {
+            audioRef.current.src = fallbackSrc;
+            audioRef.current.load();
+          }
+        }
       });
     };
     
     audioRef.current.onended = () => {
+      console.log('Audio playback ended');
       setIsAudioPlaying(false);
       setIsAudioFinished(true);
       setAudioHasPlayed(true);
@@ -456,7 +468,35 @@ const StudyPage: React.FC = () => {
       console.error('Audio error:', e);
       setIsAudioLoading(false);
       setIsAudioPlaying(false);
+      
+      // Try fallback gateway if premium gateway fails
+      if (!src.startsWith('/') && !audioSrc.includes('ipfs.io')) {
+        console.log('Error loading audio, trying fallback IPFS gateway');
+        const fallbackSrc = `https://ipfs.io/ipfs/${src}`;
+        if (audioRef.current) {
+          audioRef.current.src = fallbackSrc;
+          audioRef.current.load();
+        }
+      }
     };
+    
+    // Add a timeout to handle cases where the audio doesn't load
+    setTimeout(() => {
+      if (isAudioLoading) {
+        console.log('Audio loading timeout - resetting state');
+        setIsAudioLoading(false);
+        
+        // Try fallback gateway if premium gateway times out
+        if (!src.startsWith('/') && !audioSrc.includes('ipfs.io')) {
+          console.log('Timeout loading audio, trying fallback IPFS gateway');
+          const fallbackSrc = `https://ipfs.io/ipfs/${src}`;
+          if (audioRef.current) {
+            audioRef.current.src = fallbackSrc;
+            audioRef.current.load();
+          }
+        }
+      }
+    }, 5000);
     
     // Load the audio
     audioRef.current.load();
@@ -484,22 +524,25 @@ const StudyPage: React.FC = () => {
         return;
       }
       
+      // Only set loading if we're actually going to play
       setIsAudioLoading(true);
-      audioRef.current.play().catch(err => {
-        console.error('Failed to play audio:', err);
-        setIsAudioLoading(false);
-      }).then(() => {
-        setIsAudioLoading(false);
-      });
-      setIsAudioPlaying(true);
+      
+      audioRef.current.play()
+        .then(() => {
+          setIsAudioPlaying(true);
+          setIsAudioLoading(false);
+        })
+        .catch(err => {
+          console.error('Failed to play audio:', err);
+          setIsAudioLoading(false);
+          
+          // If there was an error playing, try loading again with the IPFS gateway
+          if (feedback?.audioCid) {
+            // Try with a different gateway
+            playAudio(feedback.audioCid);
+          }
+        });
     }
-  };
-  
-  // Add function to toggle study language
-  const toggleStudyLanguage = () => {
-    // Toggle between English and Chinese
-    const newLanguage = studyLanguage === 'en' ? 'zh' : 'en';
-    setStudyLanguage(newLanguage);
   };
   
   const loading = songLoading || questionsLoading;
@@ -569,17 +612,6 @@ const StudyPage: React.FC = () => {
         </div>
       )}
       
-      {/* Language Selector */}
-      <div className="mb-4 flex justify-end">
-        <button 
-          onClick={toggleStudyLanguage}
-          className="flex items-center gap-1 text-sm bg-neutral-800 hover:bg-neutral-700 px-3 py-1.5 rounded-md"
-        >
-          <GlobeSimple size={18} weight="bold" className="text-blue-500" />
-          <span>{studyLanguage === 'en' ? '中文题目' : 'English Questions'}</span>
-        </button>
-      </div>
-      
       {/* Main content area with fixed heights to prevent layout shifts */}
       <div className="grid grid-rows-[auto_1fr] gap-4 min-h-[calc(100vh-250px)]">
         {/* Top section with avatar, question and feedback - fixed height */}
@@ -631,7 +663,12 @@ const StudyPage: React.FC = () => {
                           aria-label={isAudioPlaying ? "Pause audio" : "Play audio"}
                         >
                           {isAudioLoading ? (
-                            <Spinner size="sm" color="white" />
+                            // Custom spinner that matches the XMTP loading spinner
+                            <div 
+                              className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"
+                              role="status"
+                              aria-label="Loading"
+                            />
                           ) : isAudioPlaying ? (
                             <Pause size={16} weight="fill" className="text-white" />
                           ) : (
@@ -647,27 +684,24 @@ const StudyPage: React.FC = () => {
           </div>
         </div>
         
-        {/* Answer Options - in a separate container that doesn't shift - MADE BIGGER */}
-        <div className="space-y-4 mt-4">
+        {/* Answer Options - in a separate container that doesn't shift */}
+        <div className="space-y-2 mt-4">
           {['a', 'b', 'c', 'd'].map((option) => (
             <button
               key={option}
               onClick={() => handleAnswerSelect(option as 'a' | 'b' | 'c' | 'd')}
               disabled={!!selectedAnswer || isValidating || !isXmtpReady}
-              className={`w-full text-left p-4 rounded-lg flex items-start transition-colors text-lg ${
+              className={`w-full text-left p-6 rounded-lg flex items-start transition-colors text-lg ${
                 selectedAnswer === option
                   ? currentQuestion.userAnswer === option && currentQuestion.isCorrect
                     ? 'bg-green-900/30 border border-green-700'
                     : currentQuestion.userAnswer === option
                     ? 'bg-red-900/30 border border-red-700'
                     : 'bg-blue-900/30 border border-blue-700'
-                  : 'bg-neutral-700 hover:bg-neutral-600'
+                  : 'bg-neutral-800 hover:bg-neutral-700'
               } ${!!selectedAnswer || isValidating || !isXmtpReady ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              <span className="inline-block w-8 h-8 rounded-full bg-neutral-600 text-center mr-4 flex-shrink-0 flex items-center justify-center">
-                {option}
-              </span>
-              <span>{currentQuestion.options[option as keyof typeof currentQuestion.options]}</span>
+              <span className="py-2">{currentQuestion.options[option as keyof typeof currentQuestion.options]}</span>
             </button>
           ))}
         </div>

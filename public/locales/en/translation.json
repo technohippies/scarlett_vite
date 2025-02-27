@@ -45,6 +45,12 @@
     "contentRating": "Content Rating",
     "notFound": "Song not found"
   },
+  "study": {
+    "title": "Study",
+    "xmtpConnecting": "Connecting to messaging service...",
+    "next": "Next",
+    "finish": "Finish"
+  },
   "chat": {
     "placeholder": "Type a message...",
     "send": "Send",
@@ -62,7 +68,7 @@
     "incorrect": "Incorrect. Try again!",
     "explanation": "Explanation",
     "listenAgain": "Listen Again",
-    "nextQuestion": "Next Question",
+    "nextQuestion": "Next",
     "completeQuiz": "Complete Quiz",
     "questionProgress": "Question {{current}} of {{total}}",
     "listenAudio": "Listen to Audio",
