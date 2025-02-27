@@ -1,38 +1,70 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { Suspense, lazy, useEffect } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import './App.css';
+import MainLayout from './components/layout/MainLayout';
+import './lib/i18n';
 
-function App() {
-  const [count, setCount] = useState(0)
+// Lazy-loaded components
+const HomePage = lazy(() => import('./pages/home/HomePage'));
+const SongPage = lazy(() => import('./pages/song/SongPage'));
+const PlayPage = lazy(() => import('./pages/play/PlayPage'));
+const StudyPage = lazy(() => import('./pages/study/StudyPage'));
+const CompletePage = lazy(() => import('./pages/complete/CompletePage'));
+const ChatPage = lazy(() => import('./pages/chat/ChatPage'));
+
+// Loader component
+const Loader = () => {
+  const { t } = useTranslation();
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-neutral-900 text-white">
+      <div className="flex flex-col items-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-400 mb-3"></div>
+        <p className="text-neutral-300">{t('common.loading')}</p>
+      </div>
+    </div>
+  );
+};
+
+// Hidden Reown AppKit button for initialization
+const ReownInitializer = () => {
+  useEffect(() => {
+    // Check if the custom element is defined before trying to use it
+    if (customElements.get('appkit-button')) {
+      console.log('AppKit button element is defined');
+    } else {
+      console.warn('AppKit button element is not defined yet');
+    }
+  }, []);
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
-      <div className="flex gap-8 mb-8">
-        <a href="https://vite.dev" target="_blank" className="hover:scale-110 transition-transform">
-          <img src={viteLogo} className="h-24 w-24" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank" className="hover:scale-110 transition-transform">
-          <img src={reactLogo} className="h-24 w-24 animate-spin-slow" alt="React logo" />
-        </a>
-      </div>
-      <h1 className="text-4xl font-bold text-gray-800 mb-8">Vite + React + Tailwind CSS v4</h1>
-      <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full">
-        <button 
-          onClick={() => setCount((count) => count + 1)}
-          className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg mb-4 transition-colors"
-        >
-          Count is {count}
-        </button>
-        <p className="text-gray-700 mb-4">
-          Edit <code className="bg-gray-100 px-1 py-0.5 rounded">src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="mt-8 text-gray-600">
-        Click on the Vite and React logos to learn more
-      </p>
-    </div>
-  )
+    <>
+      {/* Only render if the custom element is defined */}
+      {typeof customElements !== 'undefined' && customElements.get('appkit-button') && (
+        // @ts-ignore - Web component
+        <appkit-button style={{ display: 'none' }} id="hidden-appkit-button" />
+      )}
+    </>
+  );
+};
+
+function App() {
+  return (
+    <Suspense fallback={<Loader />}>
+      <Router>
+        <ReownInitializer />
+        <Routes>
+          <Route path="/" element={<MainLayout><HomePage /></MainLayout>} />
+          <Route path="/songs" element={<MainLayout><HomePage /></MainLayout>} />
+          <Route path="/song/:title" element={<MainLayout><SongPage /></MainLayout>} />
+          <Route path="/song/:title/play" element={<MainLayout><PlayPage /></MainLayout>} />
+          <Route path="/song/:title/study" element={<MainLayout><StudyPage /></MainLayout>} />
+          <Route path="/song/:title/complete" element={<MainLayout><CompletePage /></MainLayout>} />
+          <Route path="/chat" element={<MainLayout><ChatPage /></MainLayout>} />
+        </Routes>
+      </Router>
+    </Suspense>
+  );
 }
 
-export default App
+export default App;

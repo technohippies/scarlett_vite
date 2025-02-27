@@ -1,0 +1,85 @@
+{
+  "app": {
+    "name": "Scarlett 导师",
+    "tagline": "通过音乐学习语言"
+  },
+  "common": {
+    "loading": "加载中...",
+    "error": "发生错误",
+    "retry": "重试",
+    "next": "下一步",
+    "previous": "上一步",
+    "save": "保存",
+    "cancel": "取消",
+    "connect": "连接钱包",
+    "disconnect": "断开连接",
+    "login": "登录",
+    "logout": "登出",
+    "goHome": "返回首页"
+  },
+  "nav": {
+    "home": "首页",
+    "songs": "歌曲",
+    "chat": "聊天",
+    "settings": "设置"
+  },
+  "home": {
+    "popularSongs": "热门歌曲",
+    "recentChats": "最近聊天",
+    "viewAllSongs": "查看所有歌曲",
+    "viewAllChats": "查看所有聊天",
+    "startLearning": "开始学习"
+  },
+  "song": {
+    "play": "播放",
+    "study": "学习",
+    "lyrics": "歌词",
+    "translation": "翻译",
+    "artist": "艺术家",
+    "duration": "时长",
+    "level": "级别",
+    "details": "歌曲详情",
+    "uniqueWords": "独特词汇",
+    "wordsPerSecond": "每秒词数",
+    "contentRating": "内容分级",
+    "notFound": "未找到歌曲"
+  },
+  "chat": {
+    "placeholder": "输入消息...",
+    "send": "发送",
+    "connectXmtp": "连接到 XMTP",
+    "connectXmtpDescription": "连接您的钱包到 XMTP 以开始与语言导师聊天。",
+    "startConversation": "开始对话",
+    "newConversation": "新对话",
+    "searchConversations": "搜索对话",
+    "noConversationsFound": "未找到对话",
+    "selectConversation": "选择一个对话或开始新对话"
+  },
+  "questions": {
+    "correct": "正确！",
+    "incorrect": "不正确。请再试一次！",
+    "explanation": "解释",
+    "listenAgain": "再次收听",
+    "nextQuestion": "下一个问题",
+    "completeQuiz": "完成测验",
+    "questionProgress": "问题 {{current}}/{{total}}",
+    "listenAudio": "收听音频",
+    "noQuestions": "没有可用的问题",
+    "noQuestionsExplanation": "这首歌曲暂时没有可用的问题。"
+  },
+  "complete": {
+    "congratulations": "恭喜！",
+    "finishedSong": "您已完成 {{title}} 的学习课程",
+    "yourProgress": "您的进度",
+    "questionsAnswered": "已回答问题",
+    "correctAnswers": "正确答案",
+    "accuracy": "准确率",
+    "saveProgress": "保存进度",
+    "shareProgress": "分享进度",
+    "goHome": "返回首页",
+    "saving": "保存中..."
+  },
+  "play": {
+    "lyricsLoading": "歌词加载中..."
+  }
+} 

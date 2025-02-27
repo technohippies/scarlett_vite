@@ -10,8 +10,28 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@farcaster/frame-sdk": "^0.0.29",
+    "@irys/upload": "^0.0.15",
+    "@irys/upload-ethereum": "^0.0.16",
+    "@phosphor-icons/react": "^2.1.7",
+    "@reown/appkit": "^1.6.9",
+    "@reown/appkit-adapter-wagmi": "^1.6.9",
+    "@tableland/sdk": "^7.2.1",
+    "@unlock-protocol/contracts": "^0.0.33",
+    "@unlock-protocol/networks": "^0.0.25",
+    "@unlock-protocol/unlock-js": "^0.51.2",
+    "@xmtp/browser-sdk": "^0.0.21",
+    "i18next": "^24.2.2",
+    "i18next-browser-languagedetector": "^8.0.4",
+    "i18next-http-backend": "^3.0.2",
+    "irys": "^0.0.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "react-i18next": "^15.4.1",
+    "react-router-dom": "^7.2.0",
+    "ts-fsrs": "^4.6.1",
+    "viem": "^2.23.5",
+    "wagmi": "^2.14.12"
   },
   "devDependencies": {
     "@eslint/js": "^9.21.0",

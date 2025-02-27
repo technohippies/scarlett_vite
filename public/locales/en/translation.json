@@ -1,0 +1,85 @@
+{
+  "app": {
+    "name": "Tutor",
+    "tagline": "Learn languages through music"
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "An error occurred",
+    "retry": "Retry",
+    "next": "Next",
+    "previous": "Previous",
+    "save": "Save",
+    "cancel": "Cancel",
+    "connect": "Connect Wallet",
+    "disconnect": "Disconnect",
+    "login": "Login",
+    "logout": "Logout",
+    "goHome": "Go Home"
+  },
+  "nav": {
+    "home": "Home",
+    "songs": "Songs",
+    "chat": "Chat",
+    "settings": "Settings"
+  },
+  "home": {
+    "popularSongs": "Popular Songs",
+    "recentChats": "Recent Chats",
+    "viewAllSongs": "View All Songs",
+    "viewAllChats": "View All Chats",
+    "startLearning": "Start Learning"
+  },
+  "song": {
+    "play": "Play",
+    "study": "Study",
+    "lyrics": "Lyrics",
+    "translation": "Translation",
+    "artist": "Artist",
+    "duration": "Duration",
+    "level": "Level",
+    "details": "Song Details",
+    "uniqueWords": "Unique Words",
+    "wordsPerSecond": "Words Per Second",
+    "contentRating": "Content Rating",
+    "notFound": "Song not found"
+  },
+  "chat": {
+    "placeholder": "Type a message...",
+    "send": "Send",
+    "connectXmtp": "Connect to XMTP",
+    "connectXmtpDescription": "Connect your wallet to XMTP to start chatting with the language tutor.",
+    "startConversation": "Start a conversation",
+    "newConversation": "New Conversation",
+    "searchConversations": "Search conversations",
+    "noConversationsFound": "No conversations found",
+    "selectConversation": "Select a conversation or start a new one"
+  },
+  "questions": {
+    "correct": "Correct!",
+    "incorrect": "Incorrect. Try again!",
+    "explanation": "Explanation",
+    "listenAgain": "Listen Again",
+    "nextQuestion": "Next Question",
+    "completeQuiz": "Complete Quiz",
+    "questionProgress": "Question {{current}} of {{total}}",
+    "listenAudio": "Listen to Audio",
+    "noQuestions": "No Questions Available",
+    "noQuestionsExplanation": "There are no questions available for this song yet."
+  },
+  "complete": {
+    "congratulations": "Congratulations!",
+    "finishedSong": "You've completed the study session for {{title}}",
+    "yourProgress": "Your Progress",
+    "questionsAnswered": "Questions Answered",
+    "correctAnswers": "Correct Answers",
+    "accuracy": "Accuracy",
+    "saveProgress": "Save Progress",
+    "shareProgress": "Share Progress",
+    "goHome": "Go Home",
+    "saving": "Saving..."
+  },
+  "play": {
+    "lyricsLoading": "Lyrics are loading..."
+  }
+} 
