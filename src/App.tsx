@@ -63,9 +63,9 @@ const ReownInitializer = () => {
 };
 
 // Updated MainLayout wrapper with flex layout
-const MainLayoutWrapper = ({ children }: { children: React.ReactNode }) => {
+const MainLayoutWrapper = ({ children, hideHeader = false }: { children: React.ReactNode, hideHeader?: boolean }) => {
   return (
-    <MainLayout>
+    <MainLayout hideHeader={hideHeader}>
       <div className="flex-1 flex flex-col">
         {children}
       </div>
@@ -81,11 +81,11 @@ function App() {
         <Routes>
           <Route path="/" element={<MainLayoutWrapper><HomePage /></MainLayoutWrapper>} />
           <Route path="/songs" element={<MainLayoutWrapper><HomePage /></MainLayoutWrapper>} />
-          <Route path="/song/:title" element={<MainLayoutWrapper><SongPage /></MainLayoutWrapper>} />
-          <Route path="/song/:title/play" element={<MainLayoutWrapper><PlayPage /></MainLayoutWrapper>} />
-          <Route path="/song/:title/study" element={<MainLayoutWrapper><StudyPage /></MainLayoutWrapper>} />
-          <Route path="/song/:title/complete" element={<MainLayoutWrapper><CompletePage /></MainLayoutWrapper>} />
-          <Route path="/chat" element={<MainLayoutWrapper><ChatPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title" element={<MainLayoutWrapper hideHeader><SongPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/play" element={<MainLayoutWrapper hideHeader><PlayPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/study" element={<MainLayoutWrapper hideHeader><StudyPage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/complete" element={<MainLayoutWrapper hideHeader><CompletePage /></MainLayoutWrapper>} />
+          <Route path="/chat" element={<MainLayoutWrapper hideHeader><ChatPage /></MainLayoutWrapper>} />
         </Routes>
       </Router>
     </Suspense>

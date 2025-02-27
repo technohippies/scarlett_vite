@@ -5,9 +5,10 @@ import { useAppKit } from '../../context/ReownContext';
 
 interface MainLayoutProps {
   children: React.ReactNode;
+  hideHeader?: boolean;
 }
 
-const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
+const MainLayout: React.FC<MainLayoutProps> = ({ children, hideHeader = false }) => {
   const { t, i18n } = useTranslation();
   const currentLanguage = i18n.language;
   const appKit = useAppKit();
@@ -158,47 +159,49 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children }) => {
   
   return (
     <div className="min-h-screen flex flex-col bg-neutral-900 text-white">
-      {/* Header */}
-      <header className="bg-neutral-800 border-b border-neutral-700 sticky top-0 z-10">
-        <div className="container mx-auto px-4 py-3 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="text-lg font-bold">{t('app.name')}</div>
-          </div>
-          
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={toggleLanguage}
-              className="flex items-center gap-1 text-sm text-neutral-300 hover:text-indigo-400"
-            >
-              <GlobeSimple size={20} weight="bold" />
-              {currentLanguage === 'en' ? '中文' : 'English'}
-            </button>
+      {/* Header - can be hidden */}
+      {!hideHeader && (
+        <header className="bg-neutral-800 border-b border-neutral-700 sticky top-0 z-10">
+          <div className="container mx-auto px-4 py-3 flex justify-between items-center">
+            <div className="flex items-center gap-2">
+              <div className="text-lg font-bold">{t('app.name')}</div>
+            </div>
             
-            {isConnected && walletAddress ? (
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1 text-sm bg-neutral-700 px-3 py-1.5 rounded-md">
-                  <Wallet size={16} weight="bold" className="text-indigo-400" />
-                  <span>{walletAddress}</span>
-                </div>
-                <button 
-                  onClick={handleLogout}
-                  className="flex items-center gap-1 text-sm bg-neutral-700 hover:bg-neutral-600 text-white px-2 py-1.5 rounded-md"
-                >
-                  <SignOut size={16} weight="bold" />
-                </button>
-              </div>
-            ) : (
+            <div className="flex items-center gap-4">
               <button 
-                onClick={handleLogin}
-                className="flex items-center gap-1 text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-md"
+                onClick={toggleLanguage}
+                className="flex items-center gap-1 text-sm text-neutral-300 hover:text-indigo-400"
               >
-                <SignIn size={18} weight="bold" />
-                {t('common.login')}
+                <GlobeSimple size={20} weight="bold" />
+                {currentLanguage === 'en' ? '中文' : 'English'}
               </button>
-            )}
+              
+              {isConnected && walletAddress ? (
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 text-sm bg-neutral-700 px-3 py-1.5 rounded-md">
+                    <Wallet size={16} weight="bold" className="text-indigo-400" />
+                    <span>{walletAddress}</span>
+                  </div>
+                  <button 
+                    onClick={handleLogout}
+                    className="flex items-center gap-1 text-sm bg-neutral-700 hover:bg-neutral-600 text-white px-2 py-1.5 rounded-md"
+                  >
+                    <SignOut size={16} weight="bold" />
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={handleLogin}
+                  className="flex items-center gap-1 text-sm bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-md"
+                >
+                  <SignIn size={18} weight="bold" />
+                  {t('common.login')}
+                </button>
+              )}
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
       
       {/* Main content */}
       <main className="flex-1 flex flex-col relative">

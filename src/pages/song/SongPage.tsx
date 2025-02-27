@@ -1,13 +1,15 @@
 import React from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
-import { Play, BookOpen, ClockCounterClockwise, CircleWavyWarning } from '@phosphor-icons/react';
+import { Play, BookOpen, ClockCounterClockwise, CircleWavyWarning, CaretLeft } from '@phosphor-icons/react';
+import PageHeader from '../../components/layout/PageHeader';
 
 const SongPage: React.FC = () => {
   const { title } = useParams<{ title: string }>();
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const { song, loading, error } = useSongByTitle(title || null);
   const currentLanguage = i18n.language;
   
@@ -20,6 +22,10 @@ const SongPage: React.FC = () => {
   const getCefrLabel = (level: number) => {
     const levels = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
     return levels[level - 1] || 'Unknown';
+  };
+  
+  const handleGoBack = () => {
+    navigate('/');
   };
   
   if (loading) {
@@ -45,6 +51,13 @@ const SongPage: React.FC = () => {
   
   return (
     <div className="container mx-auto px-4 py-6">
+      {/* Page header with back button */}
+      <PageHeader
+        leftIcon={<CaretLeft size={24} />}
+        leftLink="/"
+        title={song.song_title}
+      />
+      
       {/* Hero section with background image */}
       <div 
         className="relative min-h-[200px] bg-cover bg-center rounded-lg overflow-hidden mb-6"

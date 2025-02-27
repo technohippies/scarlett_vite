@@ -24,7 +24,7 @@ const ChatInput: React.FC<ChatInputProps> = ({
   };
 
   return (
-    <div className="sticky bottom-0 left-0 right-0 w-full border-t border-neutral-700 bg-neutral-800 z-10">
+    <div className="sticky bottom-0 left-0 right-0 w-full z-10">
       <form 
         onSubmit={handleSubmit} 
         className="p-3 w-full"

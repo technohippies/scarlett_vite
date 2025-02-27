@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { useQuestions } from '../../hooks/useQuestions';
-import { Play, SpeakerHigh, ArrowRight, User } from '@phosphor-icons/react';
+import { Play, SpeakerHigh, ArrowRight, User, X } from '@phosphor-icons/react';
+import PageHeader from '../../components/layout/PageHeader';
 
 const StudyPage: React.FC = () => {
   const { title } = useParams<{ title: string }>();
@@ -103,22 +104,16 @@ const StudyPage: React.FC = () => {
   }
   
   return (
-    <div className="flex-1 flex flex-col relative">
+    <div className="flex-1 flex flex-col relative px-4 py-6">
+      {/* Use PageHeader component instead of custom header */}
+      <PageHeader
+        leftIcon={<X size={24} />}
+        leftLink={`/song/${title}`}
+        progressPercent={((currentIndex + 1) / totalQuestions) * 100}
+      />
+
       <div className="flex-1 flex flex-col">
         <div className="flex flex-col h-full">
-          {/* Progress indicator */}
-          <div className="mb-4 flex items-center justify-between">
-            <span className="text-sm text-gray-500">
-              {t('questions.questionProgress', { current: currentIndex + 1, total: totalQuestions })}
-            </span>
-            <div className="w-[60%] h-2 bg-gray-200 rounded-full overflow-hidden">
-              <div 
-                className="h-full bg-indigo-600 transition-all duration-300"
-                style={{ width: `${((currentIndex + 1) / totalQuestions) * 100}%` }}
-              ></div>
-            </div>
-          </div>
-          
           {/* Question and answer container */}
           <div className="bg-neutral-800 rounded-lg border border-neutral-700 mb-6 overflow-hidden">
             {/* Question section - displayed as a chat message */}
@@ -181,18 +176,22 @@ const StudyPage: React.FC = () => {
           </div>
           
           {/* Next button */}
-          <button
-            className={`mt-auto w-full py-3 rounded-lg flex items-center justify-center gap-2 ${
-              feedback
-                ? 'bg-indigo-600 text-white'
-                : 'bg-neutral-700 text-neutral-400 cursor-not-allowed'
-            }`}
-            disabled={!feedback}
-            onClick={() => feedback && goToNextQuestion()}
-          >
-            {t('questions.nextQuestion')}
-            <ArrowRight size={16} weight="bold" />
-          </button>
+          {feedback && (
+            <button
+              className="mt-auto w-full py-3 rounded-lg flex items-center justify-center gap-2 bg-indigo-600 text-white"
+              onClick={() => goToNextQuestion()}
+            >
+              {currentIndex >= totalQuestions - 1 ? (
+                <div className="flex items-center justify-center gap-2">
+                  {t('questions.complete')} <ArrowRight size={16} weight="bold" />
+                </div>
+              ) : (
+                <div className="flex items-center justify-center gap-2">
+                  {t('questions.nextQuestion')} <ArrowRight size={16} weight="bold" />
+                </div>
+              )}
+            </button>
+          )}
         </div>
       </div>
     </div>

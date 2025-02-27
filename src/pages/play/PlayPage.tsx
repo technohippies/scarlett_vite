@@ -2,8 +2,9 @@ import React from 'react';
 import { useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
-import { Play, Pause, SkipBack, SkipForward } from '@phosphor-icons/react';
+import { Play, Pause, SkipBack, SkipForward, CaretLeft } from '@phosphor-icons/react';
 import { ipfsCidToUrl } from '../../lib/tableland/client';
+import PageHeader from '../../components/layout/PageHeader';
 
 const PlayPage: React.FC = () => {
   const { title } = useParams<{ title: string }>();
@@ -29,7 +30,14 @@ const PlayPage: React.FC = () => {
   }
   
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col px-4 py-6">
+      {/* Page header with back button */}
+      <PageHeader
+        leftIcon={<CaretLeft size={24} />}
+        leftLink={`/song/${title}`}
+        title={song.song_title}
+      />
+      
       <div className="text-center mb-8">
         <img 
           src={ipfsCidToUrl(song.cover_img_cid)}
