@@ -108,14 +108,34 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     
     try {
       logger.info('Loading conversations...');
+      
+      // First, sync conversations to ensure we have the latest data
+      try {
+        logger.debug('Syncing conversations before loading...');
+        await client.conversations.sync();
+        logger.debug('Conversations synced successfully');
+      } catch (syncError) {
+        logger.warn('Error syncing conversations:', syncError);
+        // Continue anyway, as we might still be able to list existing conversations
+      }
+      
       const convos = await client.conversations.list();
       logger.info(`Loaded ${convos.length} conversations`);
       
+      // Log peer addresses for debugging
+      const peerAddresses = convos.map((convo: any) => convo.peerAddress?.toLowerCase());
+      logger.debug('Conversation peer addresses:', peerAddresses);
+      
+      // Check if we have a conversation with the bot
+      const hasBotConvo = peerAddresses.includes(SCARLETT_BOT_ADDRESS.toLowerCase());
+      logger.debug(`Has bot conversation: ${hasBotConvo}`);
+      
       // Map conversations to our format
       const formattedConvos = convos.map((convo: any) => ({
-        id: convo.topic,
+        id: convo.topic || convo.conversationId,
         peerAddress: convo.peerAddress,
         updatedAt: convo.updatedAt,
+        isBot: convo.peerAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase(),
         messages: []
       }));
       
@@ -739,14 +759,52 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     
     try {
       logger.info(`Checking canMessage for ${addresses.length} addresses`);
-      const results = await client.canMessage(addresses);
+      
+      // Create a Map to store results
+      const results = new Map<string, boolean>();
+      
+      // Special handling for bot address - always return true
+      const normalAddresses = addresses.filter(addr => {
+        const isBot = addr.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase();
+        if (isBot) {
+          logger.debug(`Special handling for bot address ${addr}: Always allowing messages`);
+          results.set(addr, true);
+          return false;
+        }
+        return true;
+      });
+      
+      // Only check non-bot addresses with the XMTP network
+      if (normalAddresses.length > 0) {
+        logger.debug(`Checking ${normalAddresses.length} non-bot addresses with XMTP network`);
+        const networkResults = await client.canMessage(normalAddresses);
+        
+        // Merge results
+        for (const [addr, canMsg] of networkResults.entries()) {
+          results.set(addr, canMsg);
+        }
+      }
+      
       logger.info(`Completed canMessage check for ${addresses.length} addresses`);
-      logger.debug('canMessage results:', results);
+      logger.debug('canMessage results:', Object.fromEntries(results));
       
       return results;
     } catch (error) {
       logger.error('Error checking canMessage:', error);
-      throw error;
+      
+      // Create a fallback map with all addresses set to false
+      const fallbackResults = new Map<string, boolean>();
+      addresses.forEach(addr => {
+        // Special case for bot address - still return true even on error
+        if (addr.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()) {
+          fallbackResults.set(addr, true);
+        } else {
+          fallbackResults.set(addr, false);
+        }
+      });
+      
+      logger.warn('Returning fallback results due to error:', fallbackResults);
+      return fallbackResults;
     }
   };
 
@@ -760,39 +818,147 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     try {
       logger.info(`Getting or creating conversation with ${address}`);
       
-      // Check if we can message this address
-      const canMessageMap = await client.canMessage([address]);
-      const canMessageAddress = canMessageMap.get(address);
+      // First, sync conversations to ensure we have the latest data
+      logger.debug('Syncing conversations...');
+      try {
+        await client.conversations.sync();
+        logger.debug('Conversations synced successfully');
+      } catch (syncError) {
+        logger.warn('Error syncing conversations:', syncError);
+        // Continue anyway, as we might still be able to create a new conversation
+      }
       
-      if (!canMessageAddress) {
-        logger.warn(`Cannot message address ${address}: Not on XMTP network`);
-        throw new Error(`Address ${address} is not on the XMTP network`);
+      // Log client capabilities and network
+      logger.debug('XMTP client details:', {
+        address: await client.address,
+        environment: client.env,
+        apiUrl: client.apiUrl,
+      });
+      
+      // Special handling for bot address
+      const isBotAddress = address.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase();
+      
+      // Check if we can message this address (skip for bot address)
+      if (!isBotAddress) {
+        logger.debug(`Checking if we can message ${address}...`);
+        const canMessageMap = await client.canMessage([address]);
+        const canMessageAddress = canMessageMap.get(address);
+        
+        logger.debug(`Can message ${address}:`, canMessageAddress);
+        
+        if (!canMessageAddress) {
+          logger.warn(`Cannot message address ${address}: Not on XMTP network`);
+          throw new Error(`Address ${address} is not on the XMTP network`);
+        }
+      } else {
+        logger.debug(`Skipping canMessage check for bot address ${address}`);
       }
       
       // Try to find an existing conversation
+      logger.debug('Listing existing conversations...');
       const existingConversations = await client.conversations.list();
+      logger.debug(`Found ${existingConversations.length} existing conversations`);
+      
+      // Log all conversation peer addresses for debugging
+      logger.debug('Existing conversation peer addresses:', 
+        existingConversations.map((c: any) => c.peerAddress?.toLowerCase())
+      );
+      
       const existingConvo = existingConversations.find(
-        (convo: any) => convo.peerAddress.toLowerCase() === address.toLowerCase()
+        (convo: any) => convo.peerAddress?.toLowerCase() === address.toLowerCase()
       );
       
       if (existingConvo) {
         logger.info(`Found existing conversation with ${address}`);
-        logger.debug('Existing conversation:', existingConvo);
+        logger.debug('Existing conversation:', {
+          peerAddress: existingConvo.peerAddress,
+          topic: existingConvo.topic,
+          conversationId: existingConvo.conversationId
+        });
         return existingConvo;
       }
       
-      // Create a new conversation
-      logger.info(`Creating new conversation with ${address}`);
-      const newConvo = await client.conversations.newConversation(address);
-      logger.info(`Created new conversation with ${address}`);
-      logger.debug('New conversation:', newConvo);
+      // Create a new conversation - use newDm for XMTP v3
+      logger.info(`Creating new DM conversation with ${address}`);
+      let newConvo;
       
-      // Refresh conversations list
+      try {
+        // First try with newDm (XMTP v3 API)
+        if (typeof client.conversations.newDm === 'function') {
+          logger.debug('Using client.conversations.newDm() method (XMTP v3)');
+          newConvo = await client.conversations.newDm(address);
+        } else {
+          // Fall back to newConversation (XMTP v2 API)
+          logger.debug('Using client.conversations.newConversation() method (XMTP v2)');
+          newConvo = await client.conversations.newConversation(address);
+        }
+        
+        logger.info(`Created new conversation with ${address}`);
+        logger.debug('New conversation:', {
+          peerAddress: newConvo.peerAddress,
+          topic: newConvo.topic,
+          conversationId: newConvo.conversationId
+        });
+      } catch (createError: any) {
+        logger.error(`Error creating conversation with ${address}:`, createError);
+        
+        // If this is our bot address, provide a more helpful error message
+        if (isBotAddress) {
+          throw new Error(`Could not create conversation with Scarlett bot. The bot may not be online in the ${client.env} environment.`);
+        } else {
+          throw createError;
+        }
+      }
+      
+      // Load conversations
       await loadConversations();
       
       return newConvo;
     } catch (error) {
       logger.error(`Error getting or creating conversation with ${address}:`, error);
+      throw error;
+    }
+  };
+
+  // Create a conversation with the Scarlett bot
+  const createBotConversation = async () => {
+    if (!client) {
+      logger.error('Cannot create bot conversation: No XMTP client available');
+      throw new Error('No XMTP client available');
+    }
+    
+    try {
+      logger.info('Creating conversation with Scarlett bot...');
+      
+      try {
+        // First try with the current environment
+        const currentEnv = client.env || 'dev';
+        logger.info(`Attempting to create bot conversation in ${currentEnv} environment`);
+        const conversation = await getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+        logger.info('Successfully created conversation with Scarlett bot');
+        return conversation;
+      } catch (error) {
+        // If the first attempt fails, log the error but don't throw yet
+        logger.warn(`Failed to create bot conversation in current environment:`, error);
+        
+        // If we're already in production, throw the error
+        if (client.env === 'production') {
+          throw error;
+        }
+        
+        // Try to create a new client in production environment
+        logger.info('Attempting to create bot conversation in production environment...');
+        
+        // We can't easily switch environments with the current client
+        // So we'll just throw a more helpful error message
+        throw new Error(
+          `Could not create conversation with Scarlett bot in ${client.env} environment. ` +
+          `The bot may only be available in the production environment. ` +
+          `Please try resetting your connection and connecting to the production environment.`
+        );
+      }
+    } catch (error) {
+      logger.error('Error creating conversation with Scarlett bot:', error);
       throw error;
     }
   };
@@ -812,7 +978,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     sendMessage,
     loadConversations,
     canMessage,
-    getOrCreateConversation
+    getOrCreateConversation,
+    createBotConversation
   };
 
   return (

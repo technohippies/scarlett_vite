@@ -6,7 +6,6 @@ import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
-import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
 
 // Simple date formatter function to prevent Invalid Date issues
 const formatMessageTime = (timestamp: Date) => {
@@ -102,8 +101,8 @@ const ChatPage: React.FC = () => {
         console.log('Could not get our inbox ID:', error);
       }
       
-      // Use the getOrCreateConversation method to ensure we always use the same conversation
-      const conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+      // Use the createBotConversation method to ensure we always use the same conversation
+      const conversation = await xmtp.createBotConversation();
       console.log('Got conversation with Scarlett bot:', conversation);
       
       // Try to get the bot's inbox ID from the conversation if available
@@ -367,10 +366,10 @@ const ChatPage: React.FC = () => {
     try {
       setSendStatus('Sending message...');
       
-      // Use the getOrCreateConversation method to ensure we always use the same conversation
+      // Use the createBotConversation method to ensure we always use the same conversation
       let conversation;
       try {
-        conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+        conversation = await xmtp.createBotConversation();
         setBotConversation(conversation);
       } catch (error: any) {
         console.error('Error getting or creating conversation:', error);

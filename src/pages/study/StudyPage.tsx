@@ -63,7 +63,6 @@ const StudyPage: React.FC = () => {
   const questionsCid = song ? (studyLanguage === 'en' ? song.questions_cid_2 : song.questions_cid_1) : undefined;
   
   const { 
-    questions, 
     currentQuestion, 
     loading: questionsLoading, 
     error: questionsError,
@@ -252,7 +251,7 @@ const StudyPage: React.FC = () => {
     
     try {
       // Get or create conversation with the bot
-      const conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+      const conversation = await xmtp.createBotConversation();
       
       if (!conversation) {
         console.error('Failed to create conversation with bot');

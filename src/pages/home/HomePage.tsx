@@ -204,7 +204,6 @@ const HomePage: React.FC = () => {
   const loadBotConversation = async () => {
     if (!xmtp || !xmtp.client) {
       console.log('XMTP not connected, cannot load bot conversation');
-      addBotMessage('Please connect to the messaging service to chat with me.', true);
       return;
     }
     
@@ -227,8 +226,8 @@ const HomePage: React.FC = () => {
         console.log('Could not get our inbox ID:', error);
       }
       
-      // Use the getOrCreateConversation method to ensure we always use the same conversation
-      const conversation = await xmtp.getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+      // Use the createBotConversation method to ensure we always use the same conversation
+      const conversation = await xmtp.createBotConversation();
       console.log('Got conversation with Scarlett bot:', conversation);
       
       // Try to get the bot's inbox ID from the conversation if available

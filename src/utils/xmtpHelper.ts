@@ -104,13 +104,6 @@ export const checkSignatureFormat = (signature: string) => {
   };
 };
 
-// Define a type for the Ethereum provider
-interface EthereumProvider {
-  request: (args: { method: string; params?: any[] }) => Promise<any>;
-  on: (eventName: string, handler: (...args: any[]) => void) => void;
-  removeListener: (eventName: string, handler: (...args: any[]) => void) => void;
-}
-
 // Test signature with a wallet
 export const testSignature = async (message: string = 'Test message for XMTP signature validation') => {
   if (typeof window === 'undefined') {

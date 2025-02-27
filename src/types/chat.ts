@@ -36,4 +36,5 @@ export interface XmtpContextType {
   loadConversations: () => Promise<void>;
   canMessage: (addresses: string[]) => Promise<Map<string, boolean>>;
   getOrCreateConversation: (address: string) => Promise<any>;
+  createBotConversation: () => Promise<any>;
 } 
