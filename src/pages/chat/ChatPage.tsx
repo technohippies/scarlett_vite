@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CaretLeft, Gear } from '@phosphor-icons/react';
+import { CaretLeft } from '@phosphor-icons/react';
+// import { Gear } from '@phosphor-icons/react';
 import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
-import { useNavigate } from 'react-router-dom';
 
 // The bot address - consistent across the application
 const SCARLETT_BOT_ADDRESS = '0xc94A2d246026CedEE7d395B5B94C83aaCAd67773';
@@ -60,8 +60,6 @@ const ChatPage: React.FC = () => {
   const { t } = useTranslation();
   const xmtp = useXmtp();
   const appKit = useAppKit();
-  const navigate = useNavigate();
-  const [message, setMessage] = useState('');
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [botConversation, setBotConversation] = useState<any>(null);

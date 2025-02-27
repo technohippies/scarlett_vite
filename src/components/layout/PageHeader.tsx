@@ -18,7 +18,6 @@ const PageHeader: React.FC<PageHeaderProps> = ({
   leftLink,
   rightIcon,
   rightLink,
-  title,
   progressPercent,
   onLeftClick,
   onRightClick,
