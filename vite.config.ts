@@ -26,8 +26,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     exclude: [
-      '@xmtp/wasm-bindings',
-      '@xmtp/browser-sdk'
+      '@xmtp/wasm-bindings'
     ],
     include: [
       'protobufjs/minimal',
