@@ -6,6 +6,7 @@ import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
+import { ethers } from 'ethers';
 
 // Simple date formatter function to prevent Invalid Date issues
 const formatMessageTime = (timestamp: Date) => {
@@ -61,6 +62,79 @@ const ChatPage: React.FC = () => {
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [botConversation, setBotConversation] = useState<any>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [isReownConnected, setIsReownConnected] = useState(false);
+  const [reownSigner, setReownSigner] = useState<any>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [connectionError, setConnectionError] = useState<Error | null>(null);
+  const [currentConversation, setCurrentConversation] = useState<any>(null);
+  
+  // Check if user is connected to Reown on mount
+  useEffect(() => {
+    const checkReownConnection = async () => {
+      if (!appKit) return;
+      
+      try {
+        console.log('Checking Reown connection status with appKit:', appKit);
+        
+        // Check if we have an address and signer directly from appKit
+        // Use type assertion to access properties
+        const appKitAny = appKit as any;
+        
+        if (appKitAny.address && appKitAny.ethersSigner) {
+          console.log('User is connected to Reown with address:', appKitAny.address);
+          setIsReownConnected(true);
+          setReownSigner(appKitAny.ethersSigner);
+          return;
+        }
+        
+        // Fallback to previous approach if the direct properties aren't available
+        let signer = null;
+        
+        // Try to get the signer from AppKit using type assertion
+        if (appKitAny.getSigner && typeof appKitAny.getSigner === 'function') {
+          console.log('Getting signer from appKit.getSigner()');
+          signer = await appKitAny.getSigner();
+        } else if (appKitAny.getProvider && typeof appKitAny.getProvider === 'function') {
+          console.log('Getting provider from appKit.getProvider()');
+          const provider = await appKitAny.getProvider();
+          if (provider && provider.getSigner) {
+            signer = provider.getSigner();
+          }
+        } else if (appKitAny.connectWallet && typeof appKitAny.connectWallet === 'function') {
+          // If we have a connectWallet function but no signer yet, check if we're already connected
+          console.log('Checking if already connected via appKit.isConnected');
+          if (appKitAny.isConnected) {
+            console.log('User is already connected according to appKit.isConnected');
+            setIsReownConnected(true);
+            // Try to get the signer
+            try {
+              signer = await appKitAny.connectWallet();
+              setReownSigner(signer);
+            } catch (err) {
+              console.warn('Could not get signer from already connected wallet:', err);
+            }
+            return;
+          }
+        }
+        
+        if (signer) {
+          console.log('User is connected to Reown with signer');
+          setIsReownConnected(true);
+          setReownSigner(signer);
+        } else {
+          console.log('User is not connected to Reown (no signer found)');
+          setIsReownConnected(false);
+          setReownSigner(null);
+        }
+      } catch (error) {
+        console.error('Error checking Reown connection:', error);
+        setIsReownConnected(false);
+        setReownSigner(null);
+      }
+    };
+    
+    checkReownConnection();
+  }, [appKit]);
   
   // Check XMTP connection status and load the bot conversation
   useEffect(() => {
@@ -86,15 +160,25 @@ const ChatPage: React.FC = () => {
       setSendStatus('Loading conversation with Scarlett bot...');
       
       // Get our wallet address and inbox ID for comparison
-      const walletAddress = await xmtp.client.address;
-      console.log('Our wallet address:', walletAddress);
+      // Use type assertion for client - the XMTP Client type doesn't expose address directly in TypeScript
+      // but it is available at runtime
+      const xmtpClient = xmtp.client as any;
+      let walletAddress = '';
+      
+      try {
+        // Try to get the address from the client
+        walletAddress = await xmtpClient.address;
+        console.log('Our wallet address:', walletAddress);
+      } catch (error) {
+        console.warn('Could not get wallet address from XMTP client:', error);
+      }
       
       // Try to get our inbox ID from the client if available
       let ourInboxId = null;
       try {
         // This is a guess at the property name - may need adjustment based on actual SDK
-        if (xmtp.client.inboxId) {
-          ourInboxId = xmtp.client.inboxId;
+        if (xmtpClient.inboxId) {
+          ourInboxId = xmtpClient.inboxId;
           console.log('Our inbox ID:', ourInboxId);
         }
       } catch (error) {
@@ -215,7 +299,7 @@ const ChatPage: React.FC = () => {
       // Get our wallet address and inbox ID for comparison
       const getWalletAddress = async () => {
         if (xmtp?.client) {
-          return await xmtp.client.address;
+          return await (xmtp.client as any).address;
         }
         return null;
       };
@@ -427,85 +511,89 @@ const ChatPage: React.FC = () => {
     await sendMessageToBot(messageContent);
   };
   
-  const handleConnectWallet = async () => {
+  // Connect to Reown only (first step)
+  const handleConnectReown = async () => {
+    console.log('Connecting to Reown...');
+    setIsConnecting(true);
+    setConnectionError(null);
+    
     try {
-      console.log('Connect wallet button clicked in ChatPage');
-      
-      if (!appKit) {
-        console.warn('AppKit is not available yet in ChatPage');
-        alert('Authentication is not available yet. Please try again later.');
-        return;
+      // Use the appKit instance that was already obtained at the component level
+      if (!appKit || !appKit.connectWallet) {
+        throw new Error('AppKit not initialized or connectWallet not available');
       }
       
-      // First, ensure the user is connected to Reown
-      let signer = null;
-      
-      // Try to get the signer from AppKit
-      if (appKit.getSigner && typeof appKit.getSigner === 'function') {
-        console.log('Getting signer from appKit.getSigner()');
-        signer = await appKit.getSigner();
-      } else if (appKit.getProvider && typeof appKit.getProvider === 'function') {
-        console.log('Getting provider from appKit.getProvider()');
-        const provider = await appKit.getProvider();
-        if (provider && provider.getSigner) {
-          signer = provider.getSigner();
-        }
-      }
+      const signer = await appKit.connectWallet();
       
       if (!signer) {
-        console.log('No signer available, opening Reown login');
-        // Open Reown login if no signer is available
-        if (typeof appKit.open === 'function') {
-          console.log('Using appKit.open() method in ChatPage');
-          await appKit.open();
-        } else if (appKit.auth && typeof appKit.auth.signIn === 'function') {
-          console.log('Using appKit.auth.signIn() method in ChatPage');
-          await appKit.auth.signIn();
-        } else {
-          console.warn('AppKit methods not available in ChatPage:', appKit);
-          alert('Authentication is not available yet. Please try again later.');
-          return;
-        }
-        
-        // Wait a moment for the login to complete
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        // Try to get the signer again
-        if (appKit.getSigner && typeof appKit.getSigner === 'function') {
-          signer = await appKit.getSigner();
-        } else if (appKit.getProvider && typeof appKit.getProvider === 'function') {
-          const provider = await appKit.getProvider();
-          if (provider && provider.getSigner) {
-            signer = provider.getSigner();
-          }
-        }
+        throw new Error('Failed to connect to Reown');
       }
       
-      if (!signer) {
-        console.error('Failed to get signer after login');
-        alert('Failed to get signer. Please try again.');
-        return;
-      }
+      console.log('Successfully connected to Reown');
+      setIsReownConnected(true);
+      setReownSigner(signer);
+      return signer;
+    } catch (error) {
+      console.error('Error connecting to Reown:', error);
+      setConnectionError(error instanceof Error ? error : new Error(String(error)));
+      setIsReownConnected(false);
+      return null;
+    } finally {
+      setIsConnecting(false);
+    }
+  };
+  
+  // Connect to XMTP explicitly (second step)
+  const handleConnectXmtp = async () => {
+    if (!isReownConnected || !reownSigner) {
+      console.error('Cannot connect to XMTP: Not connected to Reown');
+      setConnectionError(new Error('Please connect to Reown first'));
+      return;
+    }
+    
+    if (!xmtp) {
+      console.error('XMTP context is not available');
+      setConnectionError(new Error('XMTP context is not available'));
+      return;
+    }
+    
+    try {
+      setIsConnecting(true);
+      setConnectionError(null);
       
-      console.log('Signer obtained, connecting to XMTP');
+      console.log('Connecting to XMTP with signer:', reownSigner);
       
-      // Now connect to XMTP with the signer
-      if (xmtp) {
+      // Use the connectXmtp method which is available on the context
+      await xmtp.connectXmtp(reownSigner);
+      
+      // Check if we're connected
+      if (xmtp.client) {
+        console.log('Connected to XMTP!');
+        
+        // Get our wallet address for logging - use type assertion
+        // The XMTP Client type doesn't expose address directly in TypeScript
+        // but it is available at runtime
+        const xmtpClient = xmtp.client as any;
+        let walletAddress = '';
+        
         try {
-          console.log('Connecting to XMTP with signer');
-          await xmtp.connectXmtp(signer);
-          console.log('XMTP connection successful');
+          walletAddress = await xmtpClient.address;
+          console.log('Connected with wallet address:', walletAddress);
         } catch (error) {
-          console.error('Error connecting to XMTP:', error);
-          alert('Failed to connect to XMTP. Please try again.');
+          console.warn('Could not get wallet address from XMTP client:', error);
         }
+        
+        // Load or create conversation with the bot
+        await loadBotConversation();
       } else {
-        console.error('XMTP context not available');
-        alert('XMTP service is not available. Please try again later.');
+        console.error('Failed to connect to XMTP: No client after connect');
+        setConnectionError(new Error('Failed to connect to XMTP'));
       }
     } catch (error) {
-      console.error('Error during connect wallet in ChatPage:', error);
-      alert('Error during connect wallet. Please try again later.');
+      console.error('Error connecting to XMTP:', error);
+      setConnectionError(error instanceof Error ? error : new Error(String(error)));
+    } finally {
+      setIsConnecting(false);
     }
   };
   
@@ -526,12 +614,36 @@ const ChatPage: React.FC = () => {
           <p className="text-neutral-300 mb-6">
             {t('chat.connectXmtpDescription')}
           </p>
-          <button 
-            onClick={handleConnectWallet}
-            className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium"
-          >
-            {t('common.connect')}
-          </button>
+          
+          {!isReownConnected ? (
+            <button 
+              onClick={handleConnectReown}
+              className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium w-full mb-4"
+            >
+              Step 1: Connect Wallet with Reown
+            </button>
+          ) : (
+            <>
+              <div className="flex items-center justify-center mb-4 text-green-500">
+                <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                <span>Wallet Connected</span>
+              </div>
+              
+              <button 
+                onClick={handleConnectXmtp}
+                className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium w-full"
+              >
+                Step 2: Connect to XMTP Messaging
+              </button>
+            </>
+          )}
+          
+          {connectionError && (
+            <div className="mt-4 p-3 bg-red-900/20 border border-red-700 rounded-lg text-red-400 text-sm">
+              <p className="font-medium">Connection Error:</p>
+              <p>{connectionError.message}</p>
+            </div>
+          )}
         </div>
       </div>
     );

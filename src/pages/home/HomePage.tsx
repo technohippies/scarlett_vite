@@ -211,7 +211,7 @@ const HomePage: React.FC = () => {
       setSendStatus('Loading conversation with Scarlett bot...');
       
       // Get our wallet address and inbox ID for comparison
-      const walletAddress = await xmtp.client.address;
+      const walletAddress = await (xmtp.client as any).address;
       console.log('Our wallet address:', walletAddress);
       
       // Try to get our inbox ID from the client if available
@@ -340,7 +340,7 @@ const HomePage: React.FC = () => {
       // Get our wallet address and inbox ID for comparison
       const getWalletAddress = async () => {
         if (xmtp?.client) {
-          return await xmtp.client.address;
+          return await (xmtp.client as any).address;
         }
         return null;
       };

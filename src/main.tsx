@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
 import ReownProvider from './context/ReownContext'
-import XmtpProvider from './context/XmtpContext'
+import { XmtpProvider } from './context/XmtpContext'
 import initXmtpEnvironment from './utils/xmtpHelper'
 
 // Ensure Buffer is available first

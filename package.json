@@ -21,6 +21,7 @@
     "@unlock-protocol/unlock-js": "^0.51.2",
     "@xmtp/browser-sdk": "0.0.21",
     "buffer": "^6.0.3",
+    "ethers": "^6.13.5",
     "i18next": "^24.2.2",
     "i18next-browser-languagedetector": "^8.0.4",
     "i18next-http-backend": "^3.0.2",
@@ -31,7 +32,6 @@
     "react-i18next": "^15.4.1",
     "react-router-dom": "^7.2.0",
     "ts-fsrs": "^4.6.1",
-    "viem": "^2.23.5",
     "vite": "^6.2.0",
     "vite-tsconfig-paths": "^5.1.4",
     "wagmi": "^2.14.12"
