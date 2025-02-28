@@ -48,6 +48,9 @@
   "study": {
     "title": "学习",
     "xmtpConnecting": "正在连接消息服务...",
+    "xmtpConnectingWait": "这可能需要一点时间。您可能需要批准钱包签名。",
+    "xmtpConnectionFailed": "连接消息服务失败。请刷新页面并重试。",
+    "xmtpConnectionNotReady": "消息服务连接尚未就绪。请刷新页面并重试。",
     "next": "下一题",
     "finish": "完成"
   },

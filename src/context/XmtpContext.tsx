@@ -361,6 +361,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       // Create a proper XMTP signer using our improved function
       let xmtpSigner;
       try {
+        logger.info('Creating XMTP signer...');
         xmtpSigner = await createEthersSigner(address);
         logger.info(`Created XMTP signer with wallet type: ${xmtpSigner.walletType}`);
       } catch (error) {
@@ -372,6 +373,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       }
       
       // Get encryption key for this user
+      logger.info('Getting encryption key...');
       const encryptionKey = getOrCreateEncryptionKey(address);
       logger.info('Using encryption key for database');
       
@@ -401,23 +403,46 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       });
       
       try {
-        // Create the XMTP client
-        const xmtpClient = await Client.create(xmtpSigner as any, encryptionKey, clientOptions);
+        // Create the XMTP client with a timeout
+        logger.info('Starting client creation...');
+        const clientCreationPromise = Client.create(xmtpSigner as any, encryptionKey, clientOptions);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            logger.error('XMTP client creation timed out after 20 seconds');
+            reject(new Error('XMTP client creation timed out after 20 seconds'));
+          }, 20000); // 20 second timeout
+        });
+        
+        // Race the client creation promise against the timeout
+        logger.info('Waiting for client creation or timeout...');
+        const xmtpClient = await Promise.race([clientCreationPromise, timeoutPromise]);
         
         logger.info('XMTP client created successfully');
         setClient(xmtpClient);
         setIsConnected(true);
         
         // Load conversations
+        logger.info('Loading conversations...');
         await loadConversations();
+        logger.info('Conversations loaded successfully');
       } catch (error: any) {
         logger.error('Error creating XMTP client:', error);
         logDetailedError(error, 'XMTP Client Creation');
+        
+        // Check for specific error types
+        if (error.message && error.message.includes('timeout')) {
+          logger.error('Client creation timed out. This could be due to network issues or wallet signature delays.');
+        } else if (error.message && error.message.includes('signature')) {
+          logger.error('Signature-related error. The user may have rejected the signature request or there might be wallet compatibility issues.');
+        }
+        
         setConnectionError(error);
+        throw error;
       }
     } catch (error) {
       logger.error('Error in connectXmtp:', error);
       setConnectionError(error as Error);
+      throw error;
     } finally {
       setIsConnecting(false);
       clientCreationInProgressRef.current = false;
@@ -653,8 +678,112 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
 
   // Connect with wagmi (legacy method, kept for compatibility)
   const connectWithWagmi = async (): Promise<boolean> => {
-    logger.warn('connectWithWagmi is deprecated, use connectWithEthers instead');
-    return false;
+    logger.info('Connecting with wagmi...');
+    
+    try {
+      setIsConnecting(true);
+      setConnectionError(null);
+      
+      // Check if we already have a client
+      if (client) {
+        logger.info("XMTP client already exists, using existing client");
+        setIsConnected(true);
+        setIsConnecting(false);
+        return true;
+      }
+      
+      // Get the wagmi config
+      if (!window.ethereum) {
+        logger.error('No Ethereum provider found');
+        setConnectionError(new Error('No Ethereum provider found'));
+        setIsConnecting(false);
+        return false;
+      }
+      
+      // Create a provider
+      const provider = new ethers.BrowserProvider(window.ethereum as any);
+      logger.info('Created ethers provider');
+      
+      // Request accounts to ensure connection
+      try {
+        logger.info('Requesting accounts...');
+        await provider.send('eth_requestAccounts', []);
+        logger.info('Successfully requested accounts');
+      } catch (error) {
+        logger.error('Failed to request accounts:', error);
+        setConnectionError(new Error('Failed to connect wallet'));
+        setIsConnecting(false);
+        return false;
+      }
+      
+      // Get signer
+      let signer;
+      try {
+        logger.info('Getting signer from provider...');
+        signer = await provider.getSigner();
+        logger.info('Got signer from provider');
+        
+        // Log signer details for debugging
+        const address = await signer.getAddress();
+        logger.info(`Signer address: ${address}`);
+      } catch (error) {
+        logger.error('Failed to get signer:', error);
+        setConnectionError(new Error('Failed to get signer from wallet'));
+        setIsConnecting(false);
+        return false;
+      }
+      
+      // Connect to XMTP with the signer
+      try {
+        logger.info('Connecting to XMTP with signer...');
+        
+        // Add a timeout to prevent getting stuck
+        const connectionPromise = connectXmtp(signer);
+        const timeoutPromise = new Promise<void>((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('XMTP connection timed out after 15 seconds'));
+          }, 15000); // 15 second timeout
+        });
+        
+        // Race the connection promise against the timeout
+        await Promise.race([connectionPromise, timeoutPromise]);
+        
+        logger.info('Successfully connected to XMTP with wagmi');
+        
+        // Explicitly check if we're connected after the attempt
+        const connectionSuccessful = client !== null && isConnected;
+        logger.info(`Connection status after attempt: ${connectionSuccessful ? 'Connected' : 'Not connected'}`);
+        
+        // If we're not connected but didn't get an error, log a warning
+        if (!connectionSuccessful) {
+          logger.warn('Connection attempt completed without error, but client is not connected');
+          logger.warn('Client state:', { client: !!client, isConnected, isConnecting });
+        }
+        
+        return connectionSuccessful; // Return the actual connection state
+      } catch (error) {
+        logger.error('Failed to connect to XMTP with wagmi:', error);
+        
+        // Log detailed error information
+        if (error instanceof Error) {
+          logger.error('Error details:', {
+            name: error.name,
+            message: error.message,
+            stack: error.stack?.split('\n').slice(0, 3).join('\n')
+          });
+        }
+        
+        setConnectionError(error instanceof Error ? error : new Error(String(error)));
+        return false;
+      } finally {
+        setIsConnecting(false);
+      }
+    } catch (error) {
+      logger.error('Error in connectWithWagmi:', error);
+      setConnectionError(error instanceof Error ? error : new Error(String(error)));
+      setIsConnecting(false);
+      return false;
+    }
   };
 
   // Connect with ethers

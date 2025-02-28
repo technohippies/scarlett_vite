@@ -109,14 +109,47 @@ const StudyPage: React.FC = () => {
   // Add state for FSRS cards
   const [fsrsCards, setFsrsCards] = useState<Map<string, any>>(new Map());
   
+  // Add state for tracking XMTP connection status
+  const [isXmtpConnecting, setIsXmtpConnecting] = useState(false);
+  const [xmtpConnectionError, setXmtpConnectionError] = useState<string | null>(null);
+  
+  // Check initial XMTP connection status when component mounts
+  useEffect(() => {
+    if (xmtp) {
+      console.log('Initial XMTP connection check:', { 
+        isConnected: xmtp.isConnected, 
+        hasClient: !!xmtp.client 
+      });
+      
+      // If we already have a client or are connected, set ready state
+      if (xmtp.client || xmtp.isConnected) {
+        console.log('User is already connected to XMTP');
+        setIsXmtpReady(true);
+      }
+    }
+  }, []);
+  
   // Check if XMTP is connected - FIXED: added connection attempt tracking
   useEffect(() => {
-    if (xmtp?.isConnected) {
-      setIsXmtpReady(true);
-    } else {
-      setIsXmtpReady(false);
+    // Check if XMTP is connected when the component mounts or when xmtp context changes
+    if (xmtp) {
+      console.log('Checking XMTP connection status:', { 
+        isConnected: xmtp.isConnected, 
+        hasClient: !!xmtp.client 
+      });
+      
+      // Consider connected if either isConnected is true or client exists
+      if (xmtp.isConnected || xmtp.client) {
+        console.log('XMTP is connected or has client');
+        setIsXmtpReady(true);
+        setIsXmtpConnecting(false);
+        setXmtpConnectionError(null);
+      } else {
+        console.log('XMTP is not connected');
+        setIsXmtpReady(false);
+      }
     }
-  }, [xmtp?.isConnected]);
+  }, [xmtp, xmtp?.isConnected, xmtp?.client]);
   
   // Reset selected answer when question changes
   useEffect(() => {
@@ -139,41 +172,7 @@ const StudyPage: React.FC = () => {
   const handleAnswerSelect = async (answer: 'a' | 'b' | 'c' | 'd') => {
     if (selectedAnswer || feedback || isValidating || !currentQuestion || !song) return;
     
-    // Check if XMTP is ready
-    if (!isXmtpReady) {
-      // FIXED: Only attempt to connect once to prevent repeated signature requests
-      if (!xmtpConnectionAttempted && xmtp) {
-        setXmtpConnectionAttempted(true);
-        setFeedback({
-          isCorrect: false,
-          explanation: 'Connecting to XMTP...'
-        });
-        
-        try {
-          // Try to get the wallet client from the context
-          if (xmtp.connectWithWagmi) {
-            await xmtp.connectWithWagmi();
-            setIsXmtpReady(true);
-            setFeedback(null);
-            return; // Exit and let the user try again
-          }
-        } catch (error) {
-          console.error('Failed to connect to XMTP:', error);
-          setFeedback({
-            isCorrect: false,
-            explanation: 'Failed to connect to XMTP. Please refresh the page and try again.'
-          });
-          return;
-        }
-      } else {
-        setFeedback({
-          isCorrect: false,
-          explanation: 'XMTP connection is not ready. Please refresh the page and try again.'
-        });
-        return;
-      }
-    }
-    
+    // XMTP connection is now handled separately, so we can assume it's connected here
     setSelectedAnswer(answer);
     setIsValidating(true);
     setFeedback({
@@ -642,6 +641,7 @@ const StudyPage: React.FC = () => {
   const loading = songLoading || questionsLoading;
   const error = songError || questionsError;
   
+  // Return the loading state if content is still loading
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-6">
@@ -658,6 +658,7 @@ const StudyPage: React.FC = () => {
     );
   }
   
+  // Return error state if there's an error
   if (error || !song || !currentQuestion) {
     return (
       <div className="container mx-auto px-4 py-6">
@@ -678,8 +679,128 @@ const StudyPage: React.FC = () => {
     );
   }
   
+  // If XMTP is not connected, show a simple connect screen
+  if (!isXmtpReady) {
+    return (
+      <div className="container mx-auto px-4 py-6">
+        <PageHeader
+          leftIcon={<CaretLeft size={24} />}
+          leftLink={`/song/${title}`}
+          title={song?.song_title || t('loading')}
+        />
+        
+        <div className="flex flex-col items-center justify-center py-12">
+          <h2 className="text-xl font-bold mb-4">{t('study.connectToStart')}</h2>
+          <p className="text-neutral-400 mb-6 text-center max-w-md">
+            {t('chat.xmtpExplanation')}
+          </p>
+          
+          <button
+            onClick={() => {
+              if (xmtp && !isXmtpConnecting) {
+                setXmtpConnectionAttempted(true);
+                setIsXmtpConnecting(true);
+                setXmtpConnectionError(null);
+                
+                // Add a timeout to prevent getting stuck in connecting state
+                const connectionTimeout = setTimeout(() => {
+                  console.log('XMTP connection attempt timed out');
+                  setIsXmtpConnecting(false);
+                  setXmtpConnectionError(t('study.xmtpConnectionTimeout'));
+                }, 15000); // 15 second timeout
+                
+                try {
+                  console.log('Attempting to connect to XMTP...');
+                  
+                  // First check if we already have a client
+                  if (xmtp.client) {
+                    console.log('XMTP client already exists, setting ready state');
+                    clearTimeout(connectionTimeout);
+                    setIsXmtpConnecting(false);
+                    setIsXmtpReady(true);
+                    return;
+                  }
+                  
+                  if (xmtp.connectWithWagmi) {
+                    xmtp.connectWithWagmi()
+                      .then(connected => {
+                        clearTimeout(connectionTimeout);
+                        setIsXmtpConnecting(false);
+                        
+                        // Even if connected is false, check if client exists
+                        if (xmtp.client) {
+                          console.log('XMTP client exists after connection attempt');
+                          setIsXmtpReady(true);
+                          return;
+                        }
+                        
+                        if (!connected) {
+                          console.error('Failed to connect to XMTP');
+                          setXmtpConnectionError(t('study.xmtpConnectionFailed'));
+                        } else {
+                          setIsXmtpReady(true);
+                        }
+                      })
+                      .catch(error => {
+                        console.error('Error connecting to XMTP:', error);
+                        clearTimeout(connectionTimeout);
+                        setIsXmtpConnecting(false);
+                        setXmtpConnectionError(error instanceof Error ? error.message : String(error));
+                      });
+                  } else {
+                    clearTimeout(connectionTimeout);
+                    setIsXmtpConnecting(false);
+                    setXmtpConnectionError(t('study.xmtpConnectionNotAvailable'));
+                  }
+                } catch (error) {
+                  console.error('Failed to connect to XMTP:', error);
+                  clearTimeout(connectionTimeout);
+                  setIsXmtpConnecting(false);
+                  setXmtpConnectionError(error instanceof Error ? error.message : String(error));
+                }
+              }
+            }}
+            disabled={isXmtpConnecting}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium flex items-center justify-center min-w-[200px]"
+          >
+            {isXmtpConnecting ? (
+              <>
+                <div className="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />
+                {t('connecting')}
+              </>
+            ) : (
+              t('study.connectMessaging')
+            )}
+          </button>
+          
+          {xmtpConnectionError && (
+            <div className="mt-4 p-4 bg-red-900/20 border border-red-700 rounded-lg text-red-400 max-w-md">
+              <p className="text-sm">{xmtpConnectionError}</p>
+              <button 
+                onClick={() => {
+                  setXmtpConnectionAttempted(false);
+                  setXmtpConnectionError(null);
+                }}
+                className="mt-2 text-sm text-blue-400 hover:text-blue-300"
+              >
+                {t('retry')}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+  
+  // Main content - only shown when XMTP is connected
   return (
     <div className="container mx-auto px-4 py-6">
+      <PageHeader
+        leftIcon={<CaretLeft size={24} />}
+        leftLink="/"
+        title={song?.song_title || t('loading')}
+      />
+      
       {/* Page header with back button and progress bar */}
       <div className="mb-8 flex items-center gap-4">
         <Link
@@ -697,14 +818,6 @@ const StudyPage: React.FC = () => {
           />
         </div>
       </div>
-      
-      {/* XMTP Connection Status */}
-      {!isXmtpReady && (
-        <div className="mb-4 bg-yellow-900/20 text-yellow-400 p-3 rounded-lg flex items-center">
-          <Spinner size="sm" color="primary" className="mr-2" />
-          <span>{t('study.xmtpConnecting')}</span>
-        </div>
-      )}
       
       {/* Main content area with fixed heights to prevent layout shifts */}
       <div className="grid grid-rows-[auto_1fr] gap-4 min-h-[calc(100vh-250px)]">
@@ -784,7 +897,7 @@ const StudyPage: React.FC = () => {
             <button
               key={option}
               onClick={() => handleAnswerSelect(option as 'a' | 'b' | 'c' | 'd')}
-              disabled={!!selectedAnswer || isValidating || !isXmtpReady}
+              disabled={!!selectedAnswer || isValidating}
               className={`w-full text-left p-6 rounded-lg flex items-start transition-colors text-lg ${
                 selectedAnswer === option
                   ? currentQuestion.userAnswer === option && currentQuestion.isCorrect
@@ -793,7 +906,7 @@ const StudyPage: React.FC = () => {
                     ? 'bg-red-900/30 border border-red-700'
                     : 'bg-blue-900/30 border border-blue-700'
                   : 'bg-neutral-800 hover:bg-neutral-700'
-              } ${!!selectedAnswer || isValidating || !isXmtpReady ? 'opacity-70 cursor-not-allowed' : ''}`}
+              } ${!!selectedAnswer || isValidating ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               <span className="py-2">{currentQuestion.options[option as keyof typeof currentQuestion.options]}</span>
             </button>

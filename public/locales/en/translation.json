@@ -48,6 +48,9 @@
   "study": {
     "title": "Study",
     "xmtpConnecting": "Connecting to messaging service...",
+    "xmtpConnectingWait": "This may take a moment. You might need to approve a wallet signature.",
+    "xmtpConnectionFailed": "Failed to connect to messaging service. Please refresh the page and try again.",
+    "xmtpConnectionNotReady": "Messaging service connection is not ready. Please refresh the page and try again.",
     "next": "Next",
     "finish": "Finish"
   },

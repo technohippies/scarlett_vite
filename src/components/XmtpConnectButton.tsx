@@ -138,17 +138,63 @@ const XmtpConnectButton: React.FC<XmtpConnectButtonProps> = ({
       
       // Make sure xmtpContext is available
       if (!xmtpContext) {
+        console.error('XMTP context not available');
         throw new Error('XMTP context not available');
       }
+      
+      // Log the current state before connecting
+      console.log('XMTP state before connection:', {
+        isConnected: xmtpContext.isConnected,
+        isConnecting: xmtpContext.isConnecting,
+        hasClient: !!xmtpContext.client,
+        hasError: !!xmtpContext.connectionError
+      });
       
       // Connect to XMTP using the signer
       await xmtpContext.connectXmtp(reownSigner);
       console.log('Successfully connected to XMTP');
+      
+      // Double-check that we're actually connected
+      if (!xmtpContext.isConnected) {
+        console.warn('XMTP connection reported success but isConnected is false');
+        
+        // Log the state after connection attempt
+        console.log('XMTP state after connection attempt:', {
+          isConnected: xmtpContext.isConnected,
+          isConnecting: xmtpContext.isConnecting,
+          hasClient: !!xmtpContext.client,
+          hasError: !!xmtpContext.connectionError
+        });
+        
+        // Try connecting with wagmi as a fallback
+        if (xmtpContext.connectWithWagmi) {
+          console.log('Trying connectWithWagmi as fallback...');
+          const connected = await xmtpContext.connectWithWagmi();
+          console.log('connectWithWagmi result:', connected);
+          
+          if (!connected) {
+            throw new Error('Failed to establish XMTP connection. Please try again.');
+          }
+        } else {
+          throw new Error('Failed to establish XMTP connection. Please try again.');
+        }
+      }
+      
       if (onConnectSuccess) {
         onConnectSuccess();
       }
     } catch (err) {
       console.error('Error connecting to XMTP:', err);
+      
+      // Log more details about the error
+      if (err instanceof Error) {
+        console.error('Error details:', {
+          name: err.name,
+          message: err.message,
+          stack: err.stack
+        });
+      }
+      
       setError('Failed to connect to XMTP. Please try again.');
       if (onConnectError) {
         onConnectError(err instanceof Error ? err : new Error(String(err)));
@@ -207,8 +253,8 @@ const XmtpConnectButton: React.FC<XmtpConnectButtonProps> = ({
   return (
     <div className={`flex flex-col gap-2 ${className}`}>
       {error && (
-        <div className="text-red-500 text-sm mb-2">
-          {error}
+        <div className="text-red-500 text-sm mb-2 bg-red-500/10 p-2 rounded">
+          <strong>Error:</strong> {error}
         </div>
       )}
       
@@ -216,48 +262,91 @@ const XmtpConnectButton: React.FC<XmtpConnectButtonProps> = ({
         <button
           onClick={handleConnectReown}
           disabled={isConnecting}
-          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
         >
-          {isConnecting ? t('connecting') : t('connect_to_reown')}
+          {isConnecting ? (
+            <>
+              <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              {t('connecting')}...
+            </>
+          ) : (
+            <>Step 1: Connect Wallet</>
+          )}
         </button>
       ) : !xmtpContext?.isConnected ? (
         <div className="flex flex-col space-y-2">
-          <div className="text-green-600 font-semibold">
-            ✓ Wallet Connected: {appKitContext?.address ? `${appKitContext.address.substring(0, 6)}...${appKitContext.address.substring(appKitContext.address.length - 4)}` : 'Unknown'}
+          <div className="text-green-600 font-semibold bg-green-600/10 p-2 rounded flex items-center">
+            <span className="mr-2">✓</span> Wallet Connected: {appKitContext?.address ? `${appKitContext.address.substring(0, 6)}...${appKitContext.address.substring(appKitContext.address.length - 4)}` : 'Unknown'}
           </div>
           <button
             onClick={handleConnectXmtp}
             disabled={isConnecting || !xmtpContext}
-            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
           >
-            {isConnecting ? t('connecting') : t('connect_to_xmtp')}
+            {isConnecting ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                {t('connecting')}...
+              </>
+            ) : (
+              <>Step 2: Connect to Messaging</>
+            )}
           </button>
+          <div className="text-xs text-neutral-400 mt-1">
+            This will require a signature to verify your identity.
+          </div>
         </div>
       ) : (
-        <button
-          onClick={() => xmtpContext?.disconnectXmtp()}
-          className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors"
-        >
-          {t('disconnect')}
-        </button>
+        <div className="flex flex-col space-y-2">
+          <div className="text-green-600 font-semibold bg-green-600/10 p-2 rounded flex items-center">
+            <span className="mr-2">✓</span> Messaging Connected
+          </div>
+          <button
+            onClick={() => xmtpContext?.disconnectXmtp()}
+            className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded transition-colors"
+          >
+            {t('disconnect')}
+          </button>
+        </div>
       )}
       
-      {(isMobileDevice || showAlternativeMethod) && (
-        <button
-          onClick={handleConnectWithDirectProvider}
-          disabled={isConnecting}
-          className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2"
-        >
-          {isConnecting ? t('connecting') : t('connect_with_mobile_wallet')}
-        </button>
+      {(isMobileDevice || showAlternativeMethod) && !xmtpContext?.isConnected && (
+        <div className="mt-4">
+          <div className="text-sm text-neutral-400 mb-2">
+            Having trouble connecting? Try our direct connection method:
+          </div>
+          <button
+            onClick={handleConnectWithDirectProvider}
+            disabled={isConnecting}
+            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed w-full flex items-center justify-center"
+          >
+            {isConnecting ? (
+              <>
+                <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                {t('connecting')}...
+              </>
+            ) : (
+              <>Connect with Browser Wallet</>
+            )}
+          </button>
+        </div>
       )}
       
-      {!isMobileDevice && (
+      {!showAlternativeMethod && !isMobileDevice && !xmtpContext?.isConnected && (
         <button
-          onClick={() => setShowAlternativeMethod(!showAlternativeMethod)}
-          className="text-blue-500 hover:text-blue-700 text-sm underline mt-1"
+          onClick={() => setShowAlternativeMethod(true)}
+          className="text-sm text-blue-500 hover:text-blue-600 underline mt-2"
         >
-          {showAlternativeMethod ? t('hide_alternative_methods') : t('show_alternative_methods')}
+          Show alternative connection methods
         </button>
       )}
     </div>

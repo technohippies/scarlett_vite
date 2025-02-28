@@ -85,11 +85,11 @@ const ConfirmationPage: React.FC = () => {
     debugMessages.push(`Button clicked at: ${new Date().toISOString()}`);
     setDebugInfo(debugMessages.join('\n'));
     
-    if (!stats || !xmtpContext || !song || !xmtpContext.isConnected) {
+    // We only need stats, song, and ethereum provider to save to Irys
+    // XMTP connection is not required for Irys storage
+    if (!stats || !song) {
       const reason = !stats ? 'No stats available' : 
-                    !xmtpContext ? 'No XMTP context' : 
-                    !song ? 'No song data' : 
-                    !xmtpContext.isConnected ? 'XMTP not connected' : 'Unknown reason';
+                    !song ? 'No song data' : 'Unknown reason';
       
       console.error(`ConfirmationPage: Cannot save progress - ${reason}`);
       debugMessages.push(`Cannot save: ${reason}`);
@@ -182,8 +182,9 @@ const ConfirmationPage: React.FC = () => {
       setDebugInfo(debugMessages.join('\n'));
       
       try {
-        // Pass the provider directly to Irys
-        await irysService.init(provider);
+        // Pass window.ethereum directly to Irys
+        // This is what our updated client expects
+        await irysService.init(window.ethereum);
         console.log('ConfirmationPage: Irys initialized successfully');
         debugMessages.push('Irys initialized successfully');
       } catch (err) {

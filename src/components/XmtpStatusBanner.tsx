@@ -1,6 +1,7 @@
 import React from 'react';
 import { useXmtp } from '../context/XmtpContext';
 import XmtpConnectButton from './XmtpConnectButton';
+import { useTranslation } from 'react-i18next';
 
 interface XmtpStatusBannerProps {
   className?: string;
@@ -8,6 +9,7 @@ interface XmtpStatusBannerProps {
 
 const XmtpStatusBanner: React.FC<XmtpStatusBannerProps> = ({ className = '' }) => {
   const xmtp = useXmtp();
+  const { t } = useTranslation();
   
   // If no XMTP context or already connected, don't show anything
   if (!xmtp || xmtp.isConnected) {
@@ -23,7 +25,10 @@ const XmtpStatusBanner: React.FC<XmtpStatusBannerProps> = ({ className = '' }) =
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          Connecting to messaging service...
+          {t('study.xmtpConnecting')}
+        </div>
+        <div className="text-xs mt-1">
+          {t('study.xmtpConnectingWait')}
         </div>
       </div>
     );
@@ -37,6 +42,9 @@ const XmtpStatusBanner: React.FC<XmtpStatusBannerProps> = ({ className = '' }) =
           <div className="mb-2 md:mb-0">
             <p className="font-medium">Messaging Connection Error</p>
             <p className="text-sm">{xmtp.connectionError.message}</p>
+            <p className="text-xs mt-1">
+              Try refreshing the page or check if your wallet is connected properly.
+            </p>
           </div>
           <div>
             <XmtpConnectButton />
@@ -50,7 +58,12 @@ const XmtpStatusBanner: React.FC<XmtpStatusBannerProps> = ({ className = '' }) =
   return (
     <div className={`bg-indigo-800 text-white p-2 ${className}`}>
       <div className="container mx-auto flex flex-col md:flex-row items-center justify-between">
-        <p className="mb-2 md:mb-0">Connect to the messaging service to chat with Scarlett</p>
+        <div>
+          <p className="mb-1">{t('chat.connectXmtpDescription')}</p>
+          <p className="text-xs opacity-80">
+            {t('chat.xmtpExplanation')}
+          </p>
+        </div>
         <XmtpConnectButton />
       </div>
     </div>
