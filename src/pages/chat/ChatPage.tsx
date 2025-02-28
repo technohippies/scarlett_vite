@@ -6,7 +6,6 @@ import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
-import { ethers } from 'ethers';
 
 // Simple date formatter function to prevent Invalid Date issues
 const formatMessageTime = (timestamp: Date) => {
@@ -64,9 +63,7 @@ const ChatPage: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [isReownConnected, setIsReownConnected] = useState(false);
   const [reownSigner, setReownSigner] = useState<any>(null);
-  const [isConnecting, setIsConnecting] = useState(false);
   const [connectionError, setConnectionError] = useState<Error | null>(null);
-  const [currentConversation, setCurrentConversation] = useState<any>(null);
   
   // Check if user is connected to Reown on mount
   useEffect(() => {
@@ -514,7 +511,6 @@ const ChatPage: React.FC = () => {
   // Connect to Reown only (first step)
   const handleConnectReown = async () => {
     console.log('Connecting to Reown...');
-    setIsConnecting(true);
     setConnectionError(null);
     
     try {
@@ -538,8 +534,6 @@ const ChatPage: React.FC = () => {
       setConnectionError(error instanceof Error ? error : new Error(String(error)));
       setIsReownConnected(false);
       return null;
-    } finally {
-      setIsConnecting(false);
     }
   };
   
@@ -558,9 +552,6 @@ const ChatPage: React.FC = () => {
     }
     
     try {
-      setIsConnecting(true);
-      setConnectionError(null);
-      
       console.log('Connecting to XMTP with signer:', reownSigner);
       
       // Use the connectXmtp method which is available on the context
@@ -592,8 +583,6 @@ const ChatPage: React.FC = () => {
     } catch (error) {
       console.error('Error connecting to XMTP:', error);
       setConnectionError(error instanceof Error ? error : new Error(String(error)));
-    } finally {
-      setIsConnecting(false);
     }
   };
   

@@ -16,6 +16,26 @@ interface AppKitContextType {
   address: string | null;
   connectWallet: () => Promise<ethers.Signer | null>;
   disconnectWallet: () => void;
+  // Add missing properties used in MainLayout.tsx
+  events?: {
+    on: (event: string, callback: () => void) => void;
+    removeAllListeners: () => void;
+  };
+  getAccount?: () => Promise<{ address: string }>;
+  state?: {
+    account?: {
+      address: string;
+    };
+  };
+  account?: {
+    address: string;
+  };
+  open?: () => void;
+  auth?: {
+    signIn: () => void;
+    signOut: () => void;
+  };
+  disconnect?: () => void;
 }
 
 const AppKitContext = createContext<AppKitContextType>({
