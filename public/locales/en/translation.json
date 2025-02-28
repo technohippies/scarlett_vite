@@ -87,6 +87,24 @@
     "goHome": "Go Home",
     "saving": "Saving..."
   },
+  "confirmation": {
+    "congratulations": "Congratulations!",
+    "finishedSong": "You've completed the study session for {{title}}",
+    "yourProgress": "Your Progress",
+    "questionsAnswered": "Questions Answered",
+    "correctAnswers": "Correct Answers",
+    "accuracy": "Accuracy",
+    "saveProgress": "Save Progress to Irys",
+    "shareProgress": "Share Progress",
+    "goHome": "Go Home",
+    "saving": "Saving...",
+    "saveSuccess": "Progress saved successfully!",
+    "saveFailed": "Failed to save progress. Please try again.",
+    "cannotSave": "Cannot save progress. Please connect your wallet.",
+    "noStats": "No Statistics Available",
+    "noStatsMessage": "We couldn't find any statistics for this session. Please try again.",
+    "tryAgain": "Try Again"
+  },
   "play": {
     "lyricsLoading": "Lyrics are loading..."
   }

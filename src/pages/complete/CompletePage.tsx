@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
@@ -11,6 +11,14 @@ const CompletePage: React.FC = () => {
   const { song, loading, error } = useSongByTitle(title || null);
   
   const [isSaving, setIsSaving] = React.useState(false);
+  
+  // Redirect to the confirmation page
+  useEffect(() => {
+    console.log('CompletePage: Redirecting to confirmation page');
+    if (title && !loading) {
+      navigate(`/song/${title}/confirmation`, { replace: true });
+    }
+  }, [title, loading, navigate]);
   
   const handleSaveProgress = async () => {
     setIsSaving(true);

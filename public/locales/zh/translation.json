@@ -87,6 +87,24 @@
     "goHome": "返回首页",
     "saving": "保存中..."
   },
+  "confirmation": {
+    "congratulations": "恭喜！",
+    "finishedSong": "您已完成 {{title}} 的学习课程",
+    "yourProgress": "您的进度",
+    "questionsAnswered": "已回答问题",
+    "correctAnswers": "正确答案",
+    "accuracy": "准确率",
+    "saveProgress": "保存进度到 Irys",
+    "shareProgress": "分享进度",
+    "goHome": "返回首页",
+    "saving": "保存中...",
+    "saveSuccess": "进度保存成功！",
+    "saveFailed": "保存进度失败。请重试。",
+    "cannotSave": "无法保存进度。请连接您的钱包。",
+    "noStats": "没有可用的统计数据",
+    "noStatsMessage": "我们找不到此会话的任何统计数据。请重试。",
+    "tryAgain": "重试"
+  },
   "play": {
     "lyricsLoading": "歌词加载中..."
   }

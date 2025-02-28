@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@farcaster/frame-sdk": "^0.0.29",
-    "@irys/upload": "^0.0.15",
     "@irys/upload-ethereum": "^0.0.16",
+    "@irys/web-upload": "^0.0.15",
+    "@irys/web-upload-ethereum": "^0.0.16",
+    "@irys/web-upload-ethereum-viem-v2": "^0.0.17",
     "@phosphor-icons/react": "^2.1.7",
     "@reown/appkit": "^1.6.9",
     "@reown/appkit-adapter-wagmi": "^1.6.9",

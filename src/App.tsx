@@ -12,6 +12,7 @@ const PlayPage = lazy(() => import('./pages/play/PlayPage'));
 const StudyPage = lazy(() => import('./pages/study/StudyPage'));
 const CompletePage = lazy(() => import('./pages/complete/CompletePage'));
 const ChatPage = lazy(() => import('./pages/chat/ChatPage'));
+const ConfirmationPage = lazy(() => import('./pages/song/confirmation'));
 
 // Loader component
 const Loader = () => {
@@ -85,6 +86,7 @@ function App() {
           <Route path="/song/:title/play" element={<MainLayoutWrapper hideHeader><PlayPage /></MainLayoutWrapper>} />
           <Route path="/song/:title/study" element={<MainLayoutWrapper hideHeader><StudyPage /></MainLayoutWrapper>} />
           <Route path="/song/:title/complete" element={<MainLayoutWrapper hideHeader><CompletePage /></MainLayoutWrapper>} />
+          <Route path="/song/:title/confirmation" element={<MainLayoutWrapper hideHeader><ConfirmationPage /></MainLayoutWrapper>} />
           <Route path="/chat" element={<MainLayoutWrapper hideHeader><ChatPage /></MainLayoutWrapper>} />
         </Routes>
       </Router>

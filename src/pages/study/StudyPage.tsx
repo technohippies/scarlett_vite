@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { useQuestions } from '../../hooks/useQuestions';
@@ -8,6 +8,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
 import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
+import { fsrsService } from '../../lib/fsrs/client';
 
 // Interface for the question answer JSON sent to XMTP
 interface QuestionAnswerRequest {
@@ -50,6 +51,7 @@ const StudyPage: React.FC = () => {
   const currentLanguage = i18n.language as 'en' | 'zh';
   const { song, loading: songLoading, error: songError } = useSongByTitle(title || null);
   const xmtp = useXmtp();
+  const navigate = useNavigate();
   
   // Add state to track the selected study language (which may be different from UI language)
   const [studyLanguage, setStudyLanguage] = useState<'en' | 'zh'>(currentLanguage);
@@ -94,6 +96,18 @@ const StudyPage: React.FC = () => {
   const [isXmtpReady, setIsXmtpReady] = useState(false);
   const [xmtpConnectionAttempted, setXmtpConnectionAttempted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  
+  // Add state for tracking answered questions
+  const [questionAnswers, setQuestionAnswers] = useState<Array<{
+    uuid: string;
+    selectedAnswer: string;
+    isCorrect: boolean;
+    timestamp: number;
+    fsrs?: any;
+  }>>([]);
+  
+  // Add state for FSRS cards
+  const [fsrsCards, setFsrsCards] = useState<Map<string, any>>(new Map());
   
   // Check if XMTP is connected - FIXED: added connection attempt tracking
   useEffect(() => {
@@ -224,6 +238,30 @@ const StudyPage: React.FC = () => {
           const randomAudio = `/audio/feedback/${feedbackAudios[Math.floor(Math.random() * feedbackAudios.length)]}`;
           playAudio(randomAudio);
         }
+        
+        // Update FSRS card
+        const rating = fsrsService.rateAnswer(isCorrect || false);
+        const currentCard = fsrsCards.get(currentQuestion.uuid);
+        const updatedCard = fsrsService.updateCard(currentCard, rating);
+        
+        // Update FSRS state
+        setFsrsCards(prev => {
+          const newCards = new Map(prev);
+          newCards.set(currentQuestion.uuid, updatedCard);
+          return newCards;
+        });
+        
+        // Store the answer with FSRS data
+        setQuestionAnswers(prev => [
+          ...prev,
+          {
+            uuid: currentQuestion.uuid,
+            selectedAnswer: answer,
+            isCorrect: isCorrect,
+            timestamp: Date.now(),
+            fsrs: updatedCard
+          }
+        ]);
       } else {
         // Fallback if no response from bot
         setFeedback({
@@ -562,6 +600,45 @@ const StudyPage: React.FC = () => {
     }
   };
   
+  const handleNextQuestion = () => {
+    if (currentIndex < totalQuestions - 1) {
+      goToNextQuestion();
+    } else {
+      // All questions completed, save stats and redirect to confirmation page
+      const correctAnswers = questionAnswers.filter(q => q.isCorrect).length;
+      
+      console.log('StudyPage: All questions completed, preparing stats');
+      console.log('StudyPage: Total questions:', totalQuestions);
+      console.log('StudyPage: Correct answers:', correctAnswers);
+      console.log('StudyPage: Question answers array length:', questionAnswers.length);
+      console.log('StudyPage: First few question answers:', questionAnswers.slice(0, 3));
+      
+      // Save stats to localStorage for the confirmation page
+      const stats = {
+        totalQuestions,
+        correctAnswers,
+        songId: song?.id,
+        completedAt: Date.now(),
+        questions: questionAnswers
+      };
+      
+      console.log('StudyPage: Stats object prepared:', stats);
+      
+      try {
+        console.log('StudyPage: Saving stats to localStorage');
+        localStorage.setItem('questionStats', JSON.stringify(stats));
+        localStorage.setItem('questionAnswers', JSON.stringify(questionAnswers));
+        console.log('StudyPage: Stats saved to localStorage successfully');
+      } catch (err) {
+        console.error('StudyPage: Error saving stats to localStorage:', err);
+      }
+      
+      // Redirect to confirmation page
+      console.log('StudyPage: Redirecting to confirmation page with stats');
+      navigate(`/song/${title}/confirmation`, { state: { stats } });
+    }
+  };
+  
   const loading = songLoading || questionsLoading;
   const error = songError || questionsError;
   
@@ -729,7 +806,7 @@ const StudyPage: React.FC = () => {
         <div className="fixed bottom-0 left-0 right-0 bg-neutral-900 border-t border-neutral-800 p-4">
           <div className="container mx-auto">
             <button
-              onClick={goToNextQuestion}
+              onClick={handleNextQuestion}
               disabled={!selectedAnswer || isValidating}
               className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-blue-500 text-white text-lg ${
                 !selectedAnswer || isValidating ? 'opacity-50 cursor-not-allowed' : 'hover:bg-blue-600'
