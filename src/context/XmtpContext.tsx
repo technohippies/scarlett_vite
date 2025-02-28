@@ -495,7 +495,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       logger.info(`Sending message to conversation ${conversationId}`);
       
       // Find the conversation
-      const conversation = await client.conversations.get(conversationId);
+      const conversation = await client.conversations.getConversationById(conversationId);
       if (!conversation) {
         logger.error(`Conversation ${conversationId} not found`);
         throw new Error(`Conversation ${conversationId} not found`);
@@ -569,9 +569,9 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       // Log client capabilities and network
       logger.debug('XMTP client details:', {
-        address: await client.address,
-        environment: client.env,
-        apiUrl: client.apiUrl,
+        address: await (client as any).address,
+        environment: (client as any).env,
+        apiUrl: (client as any).apiUrl,
       });
       
       // Special handling for bot address
@@ -591,7 +591,26 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       logger.debug(`Looking for existing conversation with ${address}`);
       const existingConversations = await client.conversations.list();
       const existingConvo = existingConversations.find(
-        (convo: any) => convo.peerAddress?.toLowerCase() === address.toLowerCase()
+        (convo: any) => {
+          // Check for peerAddress in DMs
+          if (convo.peerAddress) {
+            return convo.peerAddress.toLowerCase() === address.toLowerCase();
+          }
+          
+          // For newer SDK versions, check for DM peer
+          if (typeof convo.dmPeerInboxId === 'function') {
+            try {
+              const peerInboxId = convo.dmPeerInboxId();
+              // We would need to convert address to inboxId for comparison
+              // This is a simplified check
+              return peerInboxId && peerInboxId.includes(address.toLowerCase());
+            } catch (e) {
+              return false;
+            }
+          }
+          
+          return false;
+        }
       );
       
       if (existingConvo) {
@@ -599,13 +618,13 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         return existingConvo;
       }
       
-      // Create a new conversation
+      // Create a new conversation - use newDm instead of newConversation
       logger.info(`Creating new conversation with ${address}`);
-      const newConvo = await client.conversations.newConversation(address);
+      const newConvo = await client.conversations.newDm(address);
       
       // Add to our list of conversations
       const formattedConvo = {
-        id: newConvo.topic || newConvo.conversationId,
+        id: newConvo.id || newConvo.topic || (newConvo as any).conversationId,
         peerAddress: address,
         updatedAt: new Date(),
         isBot: address.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase(),
