@@ -48,7 +48,8 @@ export default defineConfig({
     },
     server: {
         headers: {
-            'Cross-Origin-Embedder-Policy': 'credentialless',
+            // Required for SharedArrayBuffer and Atomics used by XMTP WASM
+            'Cross-Origin-Embedder-Policy': 'require-corp',
             'Cross-Origin-Opener-Policy': 'same-origin',
             'Cross-Origin-Resource-Policy': 'cross-origin',
         },
@@ -61,7 +62,25 @@ export default defineConfig({
                 target: 'https://premium.aiozpin.network',
                 changeOrigin: true,
                 secure: false,
-                rewrite: function (path) { return path; }
+                rewrite: function (path) { return path; },
+                configure: function (proxy, _options) {
+                    proxy.on('error', function (err, _req, _res) {
+                        console.log('proxy error', err);
+                    });
+                    proxy.on('proxyReq', function (proxyReq, req, _res) {
+                        console.log('Sending Request:', req.method, req.url);
+                        // Add CORS headers to the proxy request
+                        proxyReq.setHeader('Access-Control-Allow-Origin', '*');
+                        proxyReq.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+                        proxyReq.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+                    });
+                    proxy.on('proxyRes', function (proxyRes, req, _res) {
+                        console.log('Received Response:', proxyRes.statusCode, req.url);
+                        // Add CORS headers to the proxy response
+                        proxyRes.headers['Access-Control-Allow-Origin'] = '*';
+                        proxyRes.headers['Cross-Origin-Resource-Policy'] = 'cross-origin';
+                    });
+                }
             }
         }
     },

@@ -10,6 +10,17 @@ export const initXmtpEnvironment = () => {
   // Set up any global configurations for XMTP here
   console.log('[XMTP] Initializing XMTP environment');
   
+  // Check for SharedArrayBuffer support
+  const hasSharedArrayBuffer = typeof SharedArrayBuffer !== 'undefined';
+  const hasAtomics = typeof Atomics !== 'undefined';
+  
+  console.log(`[XMTP] Environment check: SharedArrayBuffer: ${hasSharedArrayBuffer}, Atomics: ${hasAtomics}`);
+  
+  // Add warning if SharedArrayBuffer is not available
+  if (!hasSharedArrayBuffer || !hasAtomics) {
+    console.warn('[XMTP] Missing SharedArrayBuffer and/or Atomics. XMTP WASM may not work correctly. The server must emit the COOP/COEP response headers to enable those.');
+  }
+  
   // Preload protobufjs to avoid issues
   preloadProtobufjs();
   
@@ -20,11 +31,32 @@ export const initXmtpEnvironment = () => {
       clearXmtpData,
       checkSignatureFormat,
       testSignature,
-      getLocalStorageKeys
+      getLocalStorageKeys,
+      checkEnvironment: () => ({
+        hasSharedArrayBuffer,
+        hasAtomics,
+        headers: {
+          coep: getHeaderValue('cross-origin-embedder-policy'),
+          coop: getHeaderValue('cross-origin-opener-policy'),
+          corp: getHeaderValue('cross-origin-resource-policy')
+        }
+      })
     };
     
     console.log('[XMTP] Diagnostic tools added to window.xmtpDiagnostics');
   }
+};
+
+// Helper to get header values
+const getHeaderValue = (headerName: string): string | null => {
+  try {
+    if (typeof document !== 'undefined') {
+      return document.querySelector('meta[http-equiv="' + headerName + '"]')?.getAttribute('content') || null;
+    }
+  } catch (e) {
+    console.error('[XMTP] Error getting header:', e);
+  }
+  return null;
 };
 
 // Preload protobufjs to avoid issues with dynamic imports
@@ -35,6 +67,17 @@ export const preloadProtobufjs = () => {
     import('protobufjs').catch(e => {
       console.warn('[XMTP] Failed to preload protobufjs:', e);
     });
+    
+    // Also try to preload buffer if needed
+    if (typeof window !== 'undefined' && typeof window.Buffer === 'undefined') {
+      import('buffer').then(({ Buffer }) => {
+        // @ts-ignore - Adding Buffer to window
+        window.Buffer = Buffer;
+        console.log('[XMTP] Buffer polyfill loaded in preloadProtobufjs');
+      }).catch(err => {
+        console.error('[XMTP] Failed to load Buffer polyfill in preloadProtobufjs:', err);
+      });
+    }
   } catch (error) {
     console.warn('[XMTP] Error preloading protobufjs:', error);
   }

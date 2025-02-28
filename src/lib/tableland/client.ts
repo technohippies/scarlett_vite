@@ -81,10 +81,23 @@ export async function getSongByTitle(title: string): Promise<Song | null> {
 }
 
 /**
- * Helper function to convert an IPFS CID to a URL
+ * Convert an IPFS CID to a URL
+ * @param cid IPFS CID
+ * @returns URL to access the content
  */
-export function ipfsCidToUrl(cid: string): string {
+export const ipfsCidToUrl = (cid: string): string => {
   if (!cid) return '';
-  // Use local proxy instead of direct IPFS gateway
+  
+  // If it's already a URL, return it
+  if (cid.startsWith('http')) {
+    return cid;
+  }
+  
+  // If it's a path starting with /, it's a local file
+  if (cid.startsWith('/')) {
+    return cid;
+  }
+  
+  // Use our proxy route to avoid CORS issues
   return `/ipfs/${cid}`;
-} 
+}; 

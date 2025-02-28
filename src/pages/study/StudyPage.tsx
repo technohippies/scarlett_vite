@@ -428,12 +428,21 @@ const StudyPage: React.FC = () => {
     }
     
     // Determine if this is an IPFS CID or a local file
-    const audioSrc = src.startsWith('/') 
-      ? src // Local file path
-      : `https://premium.aiozpin.network/ipfs/${src}`; // Use premium AIOZ IPFS gateway
+    let audioSrc;
+    if (src.startsWith('/')) {
+      // Local file path
+      audioSrc = src;
+    } else if (src.startsWith('bafy') || src.startsWith('bafk')) {
+      // This is an IPFS CID - use the proxy route to avoid CORS issues
+      audioSrc = `/ipfs/${src}`;
+    } else {
+      // Fallback to direct URL if it's not a CID format
+      audioSrc = src;
+    }
     
     console.log('Loading audio from:', audioSrc);
     audioRef.current.src = audioSrc;
+    audioRef.current.crossOrigin = "anonymous"; // Add crossOrigin attribute
     
     // Set up event listeners
     audioRef.current.onloadeddata = () => {
@@ -445,14 +454,10 @@ const StudyPage: React.FC = () => {
         setIsAudioPlaying(false);
         setIsAudioLoading(false);
         
-        // Try fallback gateway if premium gateway fails
+        // Try fallback gateway if proxy fails
         if (!src.startsWith('/') && !audioSrc.includes('ipfs.io')) {
           console.log('Trying fallback IPFS gateway');
-          const fallbackSrc = `https://ipfs.io/ipfs/${src}`;
-          if (audioRef.current) {
-            audioRef.current.src = fallbackSrc;
-            audioRef.current.load();
-          }
+          tryFallbackGateway(src);
         }
       });
     };
@@ -469,14 +474,10 @@ const StudyPage: React.FC = () => {
       setIsAudioLoading(false);
       setIsAudioPlaying(false);
       
-      // Try fallback gateway if premium gateway fails
-      if (!src.startsWith('/') && !audioSrc.includes('ipfs.io')) {
+      // Try fallback gateway if proxy fails
+      if (!src.startsWith('/')) {
         console.log('Error loading audio, trying fallback IPFS gateway');
-        const fallbackSrc = `https://ipfs.io/ipfs/${src}`;
-        if (audioRef.current) {
-          audioRef.current.src = fallbackSrc;
-          audioRef.current.load();
-        }
+        tryFallbackGateway(src);
       }
     };
     
@@ -486,19 +487,35 @@ const StudyPage: React.FC = () => {
         console.log('Audio loading timeout - resetting state');
         setIsAudioLoading(false);
         
-        // Try fallback gateway if premium gateway times out
-        if (!src.startsWith('/') && !audioSrc.includes('ipfs.io')) {
+        // Try fallback gateway if proxy times out
+        if (!src.startsWith('/')) {
           console.log('Timeout loading audio, trying fallback IPFS gateway');
-          const fallbackSrc = `https://ipfs.io/ipfs/${src}`;
-          if (audioRef.current) {
-            audioRef.current.src = fallbackSrc;
-            audioRef.current.load();
-          }
+          tryFallbackGateway(src);
         }
       }
     }, 5000);
     
     // Load the audio
+    audioRef.current.load();
+  };
+  
+  // Helper function to try different IPFS gateways
+  const tryFallbackGateway = (cid: string) => {
+    if (!audioRef.current) return;
+    
+    // Try different gateways in sequence
+    const gateways = [
+      `https://ipfs.io/ipfs/${cid}`,
+      `https://cloudflare-ipfs.com/ipfs/${cid}`,
+      `https://gateway.pinata.cloud/ipfs/${cid}`
+    ];
+    
+    // Use the first gateway in the list
+    const fallbackSrc = gateways[0];
+    console.log('Using fallback gateway:', fallbackSrc);
+    
+    audioRef.current.src = fallbackSrc;
+    audioRef.current.crossOrigin = "anonymous"; // Add crossOrigin attribute
     audioRef.current.load();
   };
   
