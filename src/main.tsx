@@ -5,8 +5,9 @@ import App from './App.tsx'
 import ReownProvider from './context/ReownContext'
 import { XmtpProvider } from './context/XmtpContext'
 import initXmtpEnvironment from './utils/xmtpHelper'
+import { initIrysEnvironment } from './utils/irysHelper'
 
-// Simple Buffer polyfill for XMTP
+// Simple Buffer polyfill for XMTP and Irys
 if (typeof window !== 'undefined' && typeof window.Buffer === 'undefined') {
   try {
     const { Buffer } = require('buffer');
@@ -26,8 +27,9 @@ if (!hasSharedArrayBuffer || !hasAtomics) {
   console.warn('Missing SharedArrayBuffer and/or Atomics. XMTP WASM may not work correctly.');
 }
 
-// Initialize XMTP environment
+// Initialize environments
 initXmtpEnvironment();
+initIrysEnvironment();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

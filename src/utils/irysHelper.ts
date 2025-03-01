@@ -20,10 +20,14 @@ const ensureCryptoPolyfill = () => {
       // Ensure getRandomValues is available
       if (typeof window.crypto.getRandomValues === 'undefined') {
         // @ts-ignore - Adding getRandomValues polyfill
-        window.crypto.getRandomValues = function(buffer) {
-          const bytes = cryptoCheck.randomBytes(buffer.length);
-          buffer.set(new Uint8Array(bytes.buffer));
-          return buffer;
+        window.crypto.getRandomValues = function(buffer: Uint8Array): Uint8Array {
+          if (!buffer) throw new Error('Buffer cannot be null');
+          const bytes = cryptoCheck.randomBytes(buffer.byteLength);
+          if (buffer instanceof Uint8Array) {
+            buffer.set(new Uint8Array(bytes));
+            return buffer;
+          }
+          throw new Error('Buffer must be a Uint8Array');
         };
       }
     }
