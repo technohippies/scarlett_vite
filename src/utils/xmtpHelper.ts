@@ -21,6 +21,9 @@ export const initXmtpEnvironment = () => {
     console.warn('[XMTP] Missing SharedArrayBuffer and/or Atomics. XMTP WASM may not work correctly. The server must emit the COOP/COEP response headers to enable those.');
   }
   
+  // Ensure Buffer is available
+  ensureBufferPolyfill();
+  
   // Preload protobufjs to avoid issues
   preloadProtobufjs();
   
@@ -28,10 +31,10 @@ export const initXmtpEnvironment = () => {
   if (typeof window !== 'undefined') {
     // Add diagnostic tools to window
     (window as any).xmtpDiagnostics = {
-      clearXmtpData,
-      checkSignatureFormat,
-      testSignature,
-      getLocalStorageKeys,
+      clearXmtpData: clearXmtpData,
+      checkSignatureFormat: checkSignatureFormat,
+      testSignature: testSignature,
+      getLocalStorageKeys: getLocalStorageKeys,
       checkEnvironment: () => ({
         hasSharedArrayBuffer,
         hasAtomics,
@@ -47,11 +50,30 @@ export const initXmtpEnvironment = () => {
   }
 };
 
+// Ensure Buffer polyfill is available
+const ensureBufferPolyfill = () => {
+  if (typeof window === 'undefined') return;
+  
+  // Make sure Buffer is available globally
+  if (typeof window.Buffer === 'undefined') {
+    try {
+      const { Buffer } = require('buffer');
+      // @ts-ignore
+      window.Buffer = Buffer;
+      console.log('[XMTP] Buffer polyfill loaded');
+    } catch (error) {
+      console.error('[XMTP] Failed to load Buffer polyfill:', error);
+    }
+  } else {
+    console.log('[XMTP] Buffer is already available globally');
+  }
+};
+
 // Helper to get header values
 const getHeaderValue = (headerName: string): string | null => {
   try {
     if (typeof document !== 'undefined') {
-      return document.querySelector('meta[http-equiv="' + headerName + '"]')?.getAttribute('content') || null;
+      return document.querySelector(`meta[http-equiv="${headerName}"]`)?.getAttribute('content') || null;
     }
   } catch (e) {
     console.error('[XMTP] Error getting header:', e);
@@ -60,7 +82,7 @@ const getHeaderValue = (headerName: string): string | null => {
 };
 
 // Preload protobufjs to avoid issues with dynamic imports
-export const preloadProtobufjs = () => {
+const preloadProtobufjs = () => {
   try {
     // This is a workaround for issues with protobufjs in some environments
     // It ensures the library is loaded before it's needed
@@ -84,7 +106,7 @@ export const preloadProtobufjs = () => {
 };
 
 // Clear all XMTP-related data from localStorage
-export const clearXmtpData = (address?: string) => {
+const clearXmtpData = (address?: string) => {
   console.log('[XMTP] Clearing XMTP data from localStorage');
   
   const keysToRemove = [];
@@ -124,7 +146,7 @@ export const clearXmtpData = (address?: string) => {
 };
 
 // Check the format of a signature
-export const checkSignatureFormat = (signature: string) => {
+const checkSignatureFormat = (signature: string) => {
   if (!signature) {
     return { valid: false, error: 'Signature is empty' };
   }
@@ -148,7 +170,7 @@ export const checkSignatureFormat = (signature: string) => {
 };
 
 // Test signature with a wallet
-export const testSignature = async (message: string = 'Test message for XMTP signature validation') => {
+const testSignature = async (message: string = 'Test message for XMTP signature validation') => {
   if (typeof window === 'undefined') {
     return { success: false, error: 'No window object found' };
   }
@@ -195,7 +217,7 @@ export const testSignature = async (message: string = 'Test message for XMTP sig
 };
 
 // Get all localStorage keys related to XMTP
-export const getLocalStorageKeys = () => {
+const getLocalStorageKeys = () => {
   const keys = {
     all: [] as string[],
     byType: {

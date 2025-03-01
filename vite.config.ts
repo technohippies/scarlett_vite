@@ -3,6 +3,7 @@ import path from 'path'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
+import { nodePolyfills } from 'vite-plugin-node-polyfills'
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -10,19 +11,37 @@ export default defineConfig({
     react(),
     tailwindcss(),
     tsconfigPaths(),
+    // Polyfills configuration for both XMTP and Irys
+    nodePolyfills({
+      // Include necessary polyfills
+      include: [
+        'buffer',
+        'process',
+        'crypto', // Add crypto for Irys
+        'stream', // Needed for crypto operations
+        'events',  // Needed for crypto operations
+        'util'     // Needed for crypto operations
+      ],
+      globals: {
+        Buffer: true,
+        process: true,
+      },
+      protocolImports: false,
+    }),
   ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
       'protobufjs/minimal.js': 'protobufjs/minimal',
-      'buffer': 'buffer',
+      // Add explicit alias for crypto
+      'crypto': 'crypto-browserify',
     },
     mainFields: ['browser', 'module', 'main'],
   },
   define: {
-    // Polyfill for process.env
-    'process.env': {},
-    'global': 'globalThis',
+    // Fix for browserify-sign
+    'process.browser': true,
+    'process.env': '{}',
   },
   optimizeDeps: {
     exclude: [
@@ -31,7 +50,10 @@ export default defineConfig({
     ],
     include: [
       'protobufjs/minimal',
-      'buffer',
+      '@irys/web-upload',
+      '@irys/web-upload-ethereum',
+      '@irys/web-upload-ethereum-ethers-v6',
+      'crypto-browserify', // Include crypto-browserify
     ],
     esbuildOptions: {
       target: 'es2020',
@@ -85,34 +107,4 @@ export default defineConfig({
       }
     }
   },
-  worker: {
-    format: 'es',
-    plugins: () => [
-      {
-        name: 'worker-globals',
-        resolveId(id) {
-          if (id === 'virtual:worker-globals') {
-            return id;
-          }
-          return null;
-        },
-        load(id) {
-          if (id === 'virtual:worker-globals') {
-            return `
-              if (typeof window === 'undefined') {
-                globalThis.window = globalThis;
-              }
-              if (typeof global === 'undefined') {
-                globalThis.global = globalThis;
-              }
-              if (typeof process === 'undefined') {
-                globalThis.process = { env: {} };
-              }
-            `;
-          }
-          return null;
-        }
-      }
-    ]
-  }
 })
