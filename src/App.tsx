@@ -5,14 +5,14 @@ import './App.css';
 import MainLayout from './components/layout/MainLayout';
 import './lib/i18n';
 
-// Lazy-loaded components
+// Lazy-loaded components with more reliable import paths
 const HomePage = lazy(() => import('./pages/home/HomePage'));
 const SongPage = lazy(() => import('./pages/song/SongPage'));
 const PlayPage = lazy(() => import('./pages/play/PlayPage'));
 const StudyPage = lazy(() => import('./pages/study/StudyPage'));
 const CompletePage = lazy(() => import('./pages/complete/CompletePage'));
 const ChatPage = lazy(() => import('./pages/chat/ChatPage'));
-const ConfirmationPage = lazy(() => import('./pages/song/confirmation'));
+const ConfirmationPage = lazy(() => import('./pages/song/confirmation/ConfirmationPage'));
 
 // Loader component
 const Loader = () => {

@@ -68,7 +68,18 @@ export default defineConfig({
       transformMixedEsModules: true,
       include: [/protobufjs/, /node_modules/],
     },
+    // Improve chunk handling for dynamic imports
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom'],
+          'xmtp': ['@xmtp/browser-sdk'],
+          'irys': ['@irys/web-upload', '@irys/web-upload-ethereum', '@irys/web-upload-ethereum-ethers-v6'],
+        }
+      }
+    }
   },
+  // Improve handling of dynamic imports in development
   server: {
     headers: {
       // Required for SharedArrayBuffer and Atomics used by XMTP WASM
