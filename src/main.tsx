@@ -29,7 +29,16 @@ if (!hasSharedArrayBuffer || !hasAtomics) {
 
 // Initialize environments
 initXmtpEnvironment();
-initIrysEnvironment();
+
+// Initialize Irys asynchronously
+(async () => {
+  try {
+    await initIrysEnvironment();
+    console.log('Irys environment initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Irys environment:', error);
+  }
+})();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
