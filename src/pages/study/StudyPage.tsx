@@ -960,38 +960,8 @@ const StudyPage: React.FC = () => {
         leftIcon={<CaretLeft size={24} />}
         leftLink={`/song/${title}`}
         title={song.song_title}
-        rightIcon={
-          <button 
-            onClick={toggleDebugPanel}
-            className="p-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-300 rounded"
-            title="Debug FSRS Data"
-          >
-            Debug
-          </button>
-        }
+        progressPercent={((currentIndex + 1) / totalQuestions) * 100}
       />
-      
-      <div className="text-sm text-neutral-400 mb-4">
-        {currentIndex + 1} / {totalQuestions}
-      </div>
-      
-      {/* Page header with back button and progress bar */}
-      <div className="mb-8 flex items-center gap-4">
-        <Link
-          to={`/song/${title}`}
-          className="text-neutral-400 hover:text-white transition-colors flex-shrink-0"
-        >
-          <CaretLeft size={24} />
-        </Link>
-        
-        {/* Progress bar - now in header */}
-        <div className="h-2 bg-neutral-800 rounded-full flex-1">
-          <div 
-            className="h-full bg-blue-500 rounded-full transition-all duration-300"
-            style={{ width: `${((currentIndex + 1) / totalQuestions) * 100}%` }}
-          />
-        </div>
-      </div>
       
       {/* Main content area with fixed heights to prevent layout shifts */}
       <div className="grid grid-rows-[auto_1fr] gap-4 min-h-[calc(100vh-250px)]">
