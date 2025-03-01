@@ -1,7 +1,5 @@
 import { cookieStorage, createStorage } from '@wagmi/core';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
-import { baseSepolia } from 'viem/chains';
-import { defineChain } from 'viem';
 
 // Get projectId from environment variable
 // Using import.meta.env for Vite
@@ -11,12 +9,17 @@ if (!projectId) {
   console.warn('Reown Project ID is not defined. Authentication features will not work properly.');
 }
 
-// Create a custom Base Sepolia configuration with a public RPC URL
-// that won't be blocked by Content Security Policy
-export const customBaseSepolia = defineChain({
-  ...baseSepolia,
+// Define Base Sepolia network configuration for Ethers and Wagmi
+export const customBaseSepolia = {
+  id: 84532,
+  name: 'Base Sepolia',
+  network: 'base-sepolia',
+  nativeCurrency: {
+    name: 'Sepolia Ether',
+    symbol: 'ETH',
+    decimals: 18,
+  },
   rpcUrls: {
-    ...baseSepolia.rpcUrls,
     default: {
       http: ['https://sepolia.base.org'],
     },
@@ -24,7 +27,7 @@ export const customBaseSepolia = defineChain({
       http: ['https://sepolia.base.org'],
     }
   }
-});
+};
 
 // Use our custom Base Sepolia configuration
 export const networks = [customBaseSepolia];

@@ -164,16 +164,14 @@ export const ReownProvider: React.FC<ReownProviderProps> = ({
       }
       
       // Create provider if not already created
-      if (!ethersProvider) {
-        const provider = new ethers.BrowserProvider(ethereum);
-        setEthersProvider(provider);
-      }
+      const provider = new ethers.BrowserProvider(ethereum);
+      setEthersProvider(provider);
       
       // Request accounts
       await ethereum.request({ method: 'eth_requestAccounts' });
       
       // Get signer
-      const signer = await ethersProvider!.getSigner();
+      const signer = await provider.getSigner();
       const userAddress = await signer.getAddress();
       
       setEthersSigner(signer);

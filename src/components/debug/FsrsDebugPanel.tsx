@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAppKit } from '../../context/ReownContext';
 import { logFsrsProgress, logAllUserProgress, logIrysData } from '../../utils/fsrsDebugger';
+import { irysService } from '../../lib/irys/client';
 
 interface FsrsDebugPanelProps {
   songId?: string;
@@ -10,12 +11,48 @@ interface FsrsDebugPanelProps {
 const FsrsDebugPanel: React.FC<FsrsDebugPanelProps> = ({ songId, onClose }) => {
   const appKit = useAppKit();
   const address = appKit?.address || null;
+  
+  console.log('[FsrsDebugPanel] Rendering with:', { 
+    address, 
+    songId, 
+    appKitConnected: !!appKit?.isConnected 
+  });
+  
   const [isLoading, setIsLoading] = useState(false);
   const [debugData, setDebugData] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAllProgress, setShowAllProgress] = useState(false);
   const [allProgress, setAllProgress] = useState<any[]>([]);
   const [isLoggingRawData, setIsLoggingRawData] = useState(false);
+  const [irysInitialized, setIrysInitialized] = useState(false);
+
+  // Check if Irys is initialized
+  useEffect(() => {
+    const checkIrysInitialization = async () => {
+      try {
+        console.log('[FsrsDebugPanel] Checking Irys initialization status...');
+        // @ts-ignore - Accessing private property for debugging
+        const isInit = irysService.isInitialized;
+        setIrysInitialized(isInit);
+        console.log('[FsrsDebugPanel] Irys initialized:', isInit);
+        
+        if (!isInit && appKit?.ethersProvider) {
+          console.log('[FsrsDebugPanel] Attempting to initialize Irys...');
+          try {
+            await irysService.init(appKit.ethersProvider, true); // Use devnet
+            setIrysInitialized(true);
+            console.log('[FsrsDebugPanel] Irys initialized successfully');
+          } catch (initErr) {
+            console.error('[FsrsDebugPanel] Failed to initialize Irys:', initErr);
+          }
+        }
+      } catch (err) {
+        console.error('[FsrsDebugPanel] Error checking Irys initialization:', err);
+      }
+    };
+    
+    checkIrysInitialization();
+  }, [appKit?.ethersProvider]);
 
   // Load FSRS data for the current user and song
   const loadFsrsData = async () => {
@@ -33,15 +70,26 @@ const FsrsDebugPanel: React.FC<FsrsDebugPanelProps> = ({ songId, onClose }) => {
     setError(null);
 
     try {
+      console.log('[FsrsDebugPanel] Loading FSRS data with:', { 
+        address, 
+        songId, 
+        showAllProgress,
+        irysInitialized
+      });
+      
       if (showAllProgress) {
+        console.log('[FsrsDebugPanel] Fetching all user progress...');
         const progress = await logAllUserProgress(address);
+        console.log('[FsrsDebugPanel] All progress fetched:', progress);
         setAllProgress(progress);
       } else if (songId) {
+        console.log('[FsrsDebugPanel] Fetching FSRS progress for song...');
         const data = await logFsrsProgress(address, songId);
+        console.log('[FsrsDebugPanel] FSRS data fetched:', data);
         setDebugData(data);
       }
     } catch (err) {
-      console.error('Error loading FSRS data:', err);
+      console.error('[FsrsDebugPanel] Error loading FSRS data:', err);
       setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setIsLoading(false);

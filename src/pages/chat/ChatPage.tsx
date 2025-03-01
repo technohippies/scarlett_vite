@@ -519,6 +519,7 @@ const ChatPage: React.FC = () => {
         throw new Error('AppKit not initialized or connectWallet not available');
       }
       
+      // Call the connectWallet function from our context
       const signer = await appKit.connectWallet();
       
       if (!signer) {

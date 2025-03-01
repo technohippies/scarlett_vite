@@ -10,6 +10,35 @@ import { fsrsService, FSRSUserProgress } from '../lib/fsrs/client';
 import { irysService } from '../lib/irys/client';
 
 /**
+ * Ensure Irys is initialized before proceeding
+ * @param userId The user's Ethereum address (needed for error messages)
+ * @returns Promise that resolves when Irys is initialized
+ */
+const ensureIrysInitialized = async (userId: string): Promise<void> => {
+  try {
+    // @ts-ignore - Accessing private property for debugging
+    if (!irysService.isInitialized) {
+      console.log(`[FSRSDebugger] Irys not initialized. Attempting to initialize...`);
+      
+      // Check if we have a provider from window.ethereum
+      if (typeof window !== 'undefined' && window.ethereum) {
+        console.log(`[FSRSDebugger] Found window.ethereum, initializing Irys...`);
+        await irysService.init(window.ethereum, true); // Use devnet
+        console.log(`[FSRSDebugger] Irys initialized successfully`);
+      } else {
+        console.error(`[FSRSDebugger] No Ethereum provider found. Cannot initialize Irys.`);
+        throw new Error(`Cannot initialize Irys: No Ethereum provider available for user ${userId}`);
+      }
+    } else {
+      console.log(`[FSRSDebugger] Irys already initialized`);
+    }
+  } catch (error) {
+    console.error(`[FSRSDebugger] Error ensuring Irys is initialized:`, error);
+    throw new Error(`Failed to initialize Irys: ${error instanceof Error ? error.message : String(error)}`);
+  }
+};
+
+/**
  * Log FSRS progress data for a specific user and song
  * @param userId The user's Ethereum address
  * @param songId The song ID
@@ -26,6 +55,9 @@ export const logFsrsProgress = async (
   console.log(`[FSRSDebugger] Logging FSRS progress for userId=${userId}, songId=${songId}`);
   
   try {
+    // Ensure Irys is initialized before proceeding
+    await ensureIrysInitialized(userId);
+    
     // Get the latest progress from FSRS service
     const fsrsProgress = await fsrsService.getLatestProgress(userId, songId);
     
@@ -90,38 +122,44 @@ export const logFsrsProgress = async (
 };
 
 /**
- * Get all progress entries for a user from Irys and log them
+ * Log all progress entries for a user
  * @param userId The user's Ethereum address
- * @returns Promise with the logged data
+ * @returns Promise with an array of progress entries
  */
 export const logAllUserProgress = async (userId: string): Promise<any[]> => {
   console.log(`[FSRSDebugger] Logging all progress for userId=${userId}`);
   
   try {
-    // Get all progress entries from Irys service
+    // Ensure Irys is initialized before proceeding
+    await ensureIrysInitialized(userId);
+    
+    // Get all progress entries from Irys
     const allProgress = await irysService.getAllUserProgress(userId);
     
     if (!allProgress || allProgress.length === 0) {
-      console.log('[FSRSDebugger] No progress entries found');
+      console.log('[FSRSDebugger] No progress entries found for this user');
       return [];
     }
     
     console.log(`[FSRSDebugger] Found ${allProgress.length} progress entries`);
     
-    // Log summary of each entry
-    allProgress.forEach((entry, index) => {
-      console.log(`[FSRSDebugger] Entry ${index + 1}:`, {
-        songId: entry.songId,
-        completedAt: new Date(entry.completedAt).toLocaleString(),
-        totalQuestions: entry.totalQuestions,
-        correctAnswers: entry.correctAnswers,
-        accuracy: entry.accuracy,
-        questionCount: entry.questions.length,
-        hasFsrsData: entry.questions.some(q => !!q.fsrs)
+    // Sort by completion date (newest first)
+    const sortedProgress = [...allProgress].sort((a, b) => 
+      new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime()
+    );
+    
+    // Log each progress entry
+    sortedProgress.forEach((progress, index) => {
+      console.log(`[FSRSDebugger] Progress #${index + 1}:`, {
+        songId: progress.songId,
+        completedAt: new Date(progress.completedAt).toLocaleString(),
+        questionCount: progress.questions.length,
+        correctAnswers: progress.correctAnswers,
+        accuracy: progress.accuracy
       });
     });
     
-    return allProgress;
+    return sortedProgress;
   } catch (error) {
     console.error('[FSRSDebugger] Error logging all user progress:', error);
     return [];
@@ -139,6 +177,9 @@ export const logIrysData = async (userId: string, songId: string): Promise<any |
   console.log(`[FSRSDebugger] Logging raw Irys data for userId=${userId}, songId=${songId}`);
   
   try {
+    // Ensure Irys is initialized before proceeding
+    await ensureIrysInitialized(userId);
+    
     // Determine if we're using devnet based on the Irys client configuration
     const isDevnet = (irysService as any).isDevnet;
     
