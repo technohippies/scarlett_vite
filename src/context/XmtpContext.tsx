@@ -669,9 +669,62 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   const createBotConversation = async () => {
     try {
       logger.info('Creating bot conversation...');
-      return await getOrCreateConversation(SCARLETT_BOT_ADDRESS);
+      
+      // Check if client is available
+      if (!client) {
+        logger.error('Cannot create bot conversation: No XMTP client available');
+        
+        // Try to reconnect if we have a wallet address
+        if (walletAddress) {
+          logger.info('Attempting to reconnect XMTP before creating bot conversation...');
+          try {
+            await connectWithEthers();
+            logger.info('Reconnection successful, proceeding with bot conversation creation');
+          } catch (reconnectError) {
+            logger.error('Failed to reconnect XMTP:', reconnectError);
+            throw new Error('Failed to connect to XMTP for bot conversation');
+          }
+        } else {
+          throw new Error('No XMTP client available and no wallet address to reconnect');
+        }
+      }
+      
+      // Check for existing conversations with the bot
+      logger.debug('Looking for existing conversation with bot');
+      const existingConversations = await client.conversations.list();
+      const botConvo = existingConversations.find(
+        (convo: any) => convo.peerAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()
+      );
+      
+      if (botConvo) {
+        logger.info('Found existing bot conversation');
+        return botConvo;
+      }
+      
+      // Create a new conversation with the bot using newDm (not newConversation)
+      logger.info('Creating new conversation with bot');
+      try {
+        const newConvo = await client.conversations.newDm(SCARLETT_BOT_ADDRESS);
+        
+        // Add to our list of conversations
+        const formattedConvo = {
+          id: newConvo.topic || newConvo.id || (newConvo as any).conversationId,
+          peerAddress: SCARLETT_BOT_ADDRESS,
+          updatedAt: new Date(),
+          isBot: true,
+          messages: []
+        };
+        
+        setConversations(prev => [...prev, formattedConvo]);
+        
+        return newConvo;
+      } catch (error) {
+        logger.error('Error creating bot conversation with newDm:', error);
+        throw error;
+      }
     } catch (error) {
       logger.error('Error creating bot conversation:', error);
+      logDetailedError(error as Error, 'Creating Bot Conversation');
       throw error;
     }
   };
@@ -805,10 +858,58 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       // Set wallet address
       setWalletAddress(address);
       
-      // Create a custom signer for XMTP
-      await createEthersSigner(address);
+      // If we already have a client, just return true
+      if (client) {
+        logger.info('Already have XMTP client, returning true');
+        setIsConnected(true);
+        return true;
+      }
       
-      return true;
+      // Create a custom signer for XMTP
+      const xmtpSigner = await createEthersSigner(address);
+      
+      // Get encryption key for this user
+      logger.info('Getting encryption key...');
+      const encryptionKey = getOrCreateEncryptionKey(address);
+      logger.info('Using encryption key for database');
+      
+      // Create client options - use only dev environment as requested
+      const clientOptions = {
+        env: 'dev' as const
+      };
+      
+      logger.info('Creating XMTP client with dev environment...');
+      try {
+        // Create the XMTP client with a timeout
+        logger.info('Starting client creation...');
+        const clientCreationPromise = Client.create(xmtpSigner as any, encryptionKey, clientOptions);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => {
+            logger.error('XMTP client creation timed out after 20 seconds');
+            reject(new Error('XMTP client creation timed out after 20 seconds'));
+          }, 20000); // 20 second timeout
+        });
+        
+        // Race the client creation promise against the timeout
+        logger.info('Waiting for client creation or timeout...');
+        const xmtpClient = await Promise.race([clientCreationPromise, timeoutPromise]);
+        
+        logger.info('XMTP client created successfully');
+        setClient(xmtpClient);
+        setIsConnected(true);
+        
+        // Load conversations
+        logger.info('Loading conversations...');
+        await loadConversations();
+        logger.info('Conversations loaded successfully');
+        
+        return true;
+      } catch (error) {
+        logger.error('Error creating XMTP client:', error);
+        logDetailedError(error as Error, 'XMTP Client Creation');
+        setConnectionError(error as Error);
+        return false;
+      }
     } catch (error) {
       logger.error('Error connecting with ethers:', error);
       setConnectionError(error as Error);

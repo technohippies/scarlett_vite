@@ -98,6 +98,9 @@ export const ipfsCidToUrl = (cid: string): string => {
     return cid;
   }
   
+  // Clean the CID if it already has an ipfs prefix
+  const cleanCid = cid.replace(/^\/ipfs\//, '');
+  
   // Use our proxy route to avoid CORS issues
-  return `/ipfs/${cid}`;
+  return `/ipfs/${cleanCid}`;
 }; 
