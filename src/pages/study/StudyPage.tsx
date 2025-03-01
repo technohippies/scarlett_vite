@@ -218,150 +218,6 @@ const StudyPage: React.FC = () => {
     }
   }, [song, address]);
   
-  // Handle when a user selects an answer
-  const handleAnswerSelect = async (answer: 'a' | 'b' | 'c' | 'd') => {
-    if (!currentQuestion) {
-      console.error('No current question to answer');
-      return;
-    }
-    
-    setIsValidating(true);
-    setSelectedAnswer(answer);
-    
-    try {
-      // Send the answer to the bot and get the response
-      const botResponse = await sendAnswerToBot(answer, currentQuestion.uuid);
-      
-      let parsedResponse: QuestionAnswerResponse | null = null;
-      
-      if (botResponse) {
-        // Try to parse the response
-        try {
-          if (typeof botResponse === 'string') {
-            parsedResponse = JSON.parse(botResponse);
-          } else if (typeof botResponse === 'object') {
-            parsedResponse = botResponse;
-          }
-          
-          // Ensure the response has the uuid property
-          if (parsedResponse && !parsedResponse.uuid) {
-            parsedResponse.uuid = currentQuestion.uuid;
-          }
-          
-          console.log('Parsed bot response:', parsedResponse);
-        } catch (parseError) {
-          console.error('Error parsing bot response:', parseError);
-          
-          // If we can't parse it, create a basic response based on the content
-          const responseText = typeof botResponse === 'string' ? botResponse : JSON.stringify(botResponse);
-          parsedResponse = {
-            isCorrect: responseText.toLowerCase().includes('correct'),
-            explanation: responseText,
-            answer: 'a', // Default to 'a' if we can't determine
-            uuid: currentQuestion.uuid
-          };
-        }
-      } else {
-        console.log('No response from bot, using fallback');
-        // Create a fallback response
-        parsedResponse = {
-          isCorrect: answer === 'a', // Assume 'a' is correct in offline mode
-          explanation: 'Could not get response from the bot. Assuming option A is correct.',
-          answer: 'a',
-          uuid: currentQuestion.uuid
-        };
-      }
-      
-      // Determine if the answer is correct
-      const isCorrect = parsedResponse?.isCorrect ?? false;
-      
-      // Update the feedback message
-      setFeedback({
-        isCorrect,
-        explanation: parsedResponse?.explanation || (isCorrect ? 'Correct!' : 'Incorrect'),
-        audioCid: parsedResponse?.audio_cid
-      });
-      
-      // Play audio feedback
-      if (isCorrect) {
-        // Only try to play audio if it exists
-        if (parsedResponse?.audio_cid) {
-          playAudio(parsedResponse.audio_cid);
-        } else {
-          // Play a local correct audio if no specific audio is provided
-          const feedbackAudios = [
-            '/audio/feedback/very-good-hen-hao.mp3',
-            '/audio/feedback/excellent-fei-chang-hao.mp3',
-            '/audio/feedback/good-job-zuo-de-hao.mp3'
-          ];
-          const randomAudio = feedbackAudios[Math.floor(Math.random() * feedbackAudios.length)];
-          playAudio(randomAudio);
-        }
-      } else {
-        // Play incorrect sound
-        playAudio('/audio/feedback/try-again-zai-lai-yi-ci.mp3');
-      }
-      
-      // Update the FSRS card
-      const currentCard = fsrsCards.get(currentQuestion.uuid);
-      try {
-        if (currentCard) {
-          const rating = isCorrect ? 4 : 1; // 4 for correct, 1 for incorrect
-          const updatedCard = await fsrsService.updateCard(currentCard, rating);
-          
-          // Store the answer with FSRS data
-          setQuestionAnswers(prev => [
-            ...prev,
-            {
-              uuid: currentQuestion.uuid,
-              selectedAnswer: answer,
-              isCorrect,
-              timestamp: Date.now(),
-              fsrs: updatedCard
-            }
-          ]);
-          
-          setFsrsCards(prev => {
-            const newCards = new Map(prev);
-            newCards.set(currentQuestion.uuid, updatedCard);
-            return newCards;
-          });
-        } else {
-          console.warn('No current card available for FSRS update');
-          
-          // Still store the answer without FSRS data
-          setQuestionAnswers(prev => [
-            ...prev,
-            {
-              uuid: currentQuestion.uuid,
-              selectedAnswer: answer,
-              isCorrect,
-              timestamp: Date.now(),
-              fsrs: undefined
-            }
-          ]);
-        }
-      } catch (fsrsError) {
-        console.error('Error updating FSRS card:', fsrsError);
-      }
-      
-      // Show the feedback for 2 seconds, then load the next question
-      setTimeout(() => {
-        setIsValidating(false);
-        setSelectedAnswer(null);
-        setFeedback(null);
-        
-        // Load the next question
-        goToNextQuestion();
-      }, 2000);
-    } catch (error) {
-      console.error('Error handling answer selection:', error);
-      setIsValidating(false);
-      setSelectedAnswer(null);
-      setFeedback(null);
-    }
-  };
-  
   // Function to send an answer to the bot and get a response
   const sendAnswerToBot = async (answer: string, questionUuid: string): Promise<any> => {
     if (!xmtp || !xmtp.client) {
@@ -386,16 +242,17 @@ const StudyPage: React.FC = () => {
         hasSend: typeof botConversation.send === 'function'
       });
       
-      // Prepare the message to send
-      const messageContent = JSON.stringify({
-        type: 'answer',
-        answer,
-        uuid: questionUuid
-      });
+      // Prepare the message to send with the correct JSON structure
+      const questionRequest = {
+        uuid: questionUuid,
+        selectedAnswer: answer,
+        songId: song?.id.toString() || "1"  // Ensure we have a songId
+      };
       
+      const messageContent = JSON.stringify(questionRequest);
       console.log('Sending message to bot:', messageContent);
       
-      // Try to send the message directly first
+      // Send the message
       if (typeof botConversation.send === 'function') {
         try {
           await botConversation.send(messageContent);
@@ -405,7 +262,7 @@ const StudyPage: React.FC = () => {
           
           // Fallback to context sendMessage if available
           if (xmtp.sendMessage && typeof xmtp.sendMessage === 'function') {
-            await xmtp.sendMessage(botConversation, messageContent);
+            await xmtp.sendMessage(botConversation.topic || botConversation.id, messageContent);
             console.log('Message sent to bot successfully using context.sendMessage()');
           } else {
             throw sendError; // Re-throw if we can't send
@@ -413,290 +270,288 @@ const StudyPage: React.FC = () => {
         }
       } else if (xmtp.sendMessage && typeof xmtp.sendMessage === 'function') {
         // Use the context method if conversation.send is not available
-        await xmtp.sendMessage(botConversation, messageContent);
+        await xmtp.sendMessage(botConversation.topic || botConversation.id, messageContent);
         console.log('Message sent to bot successfully using context.sendMessage()');
       } else {
         throw new Error('No method available to send messages');
       }
       
-      // Wait for the bot to respond (up to 15 seconds)
-      const response = await waitForBotResponse(botConversation, 15000);
-      if (!response) {
-        console.log('No response received from bot within timeout');
-        
-        // Try to manually fetch recent messages as a fallback
-        console.log('Trying to manually fetch recent messages as fallback...');
-        try {
-          const messages = await botConversation.messages();
-          console.log(`Fetched ${messages.length} messages manually`);
-          
-          // Look for very recent messages from the bot (last 10 seconds)
-          const recentTime = new Date(Date.now() - 10000); // 10 seconds ago
-          const recentBotMessages = messages.filter((msg: any) => 
-            msg.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase() && 
-            new Date(msg.sent) > recentTime
-          );
-          
-          if (recentBotMessages.length > 0) {
-            // Sort by timestamp to get the most recent message
-            recentBotMessages.sort((a: any, b: any) => 
-              new Date(b.sent).getTime() - new Date(a.sent).getTime()
-            );
-            const latestMessage = recentBotMessages[0];
-            console.log('Found recent bot message in fallback:', latestMessage.content);
-            return latestMessage.content;
-          } else {
-            console.log('No recent bot messages found in fallback');
+      // Wait for response using the original working approach
+      return new Promise((resolve) => {
+        // Set a timeout to check for messages after a delay
+        setTimeout(async () => {
+          try {
+            const messages = await botConversation.messages();
+            console.log('Retrieved messages:', messages.length);
+            
+            // Log the last few messages for debugging
+            const lastFewMessages = messages.slice(-5);
+            console.log('Last few messages:', lastFewMessages.map((msg: any) => {
+              // Safely format the date
+              let formattedDate = 'Invalid date';
+              try {
+                // Check if sent is a valid date
+                const sentDate = msg.sent instanceof Date ? msg.sent : new Date(msg.sent);
+                // Verify the date is valid before calling toISOString()
+                formattedDate = !isNaN(sentDate.getTime()) ? sentDate.toISOString() : 'Invalid date';
+              } catch (e) {
+                console.log('Error formatting message date:', e);
+              }
+              
+              return {
+                sender: msg.senderAddress,
+                content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
+                sent: formattedDate,
+                isFromBot: msg.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()
+              };
+            }));
+            
+            // Find messages that contain our question UUID and a response
+            // This is more reliable than trying to filter by sender
+            const relevantMessages = messages
+              .filter((msg: XmtpMessage) => {
+                try {
+                  // Try to get the content - it might be an object with a toString method
+                  const content = typeof msg.content === 'string' 
+                    ? msg.content 
+                    : (msg.content && typeof msg.content.toString === 'function')
+                      ? msg.content.toString() 
+                      : JSON.stringify(msg.content, bigIntReplacer);
+                  
+                  // Check if this message contains our question UUID
+                  return content.includes(questionUuid);
+                } catch (e) {
+                  console.log('Error processing message content:', e, msg);
+                  return false;
+                }
+              })
+              .sort((a: XmtpMessage, b: XmtpMessage) => {
+                // Sort by sent time, newest first
+                const timeA = a.sent ? new Date(a.sent).getTime() : 0;
+                const timeB = b.sent ? new Date(b.sent).getTime() : 0;
+                return timeB - timeA;
+              });
+            
+            console.log('Relevant messages found:', relevantMessages.length);
+            
+            // Look for response messages (not our own request)
+            const botAddress = SCARLETT_BOT_ADDRESS.toLowerCase();
+            const responseMessages = relevantMessages.filter((msg: XmtpMessage) => {
+              try {
+                // Check if this message is from the bot
+                // First check if senderAddress exists and matches the bot address
+                if (msg.senderAddress && msg.senderAddress.toLowerCase() === botAddress) {
+                  return true;
+                }
+                
+                // If we can't determine by sender, check content
+                const content = typeof msg.content === 'string' 
+                  ? msg.content 
+                  : JSON.stringify(msg.content, bigIntReplacer);
+                
+                // Check if this is a response (contains "explanation" field)
+                return content.includes('explanation');
+              } catch (e) {
+                console.log('Error filtering response message:', e);
+                return false;
+              }
+            });
+            
+            console.log('Response messages found:', responseMessages.length);
+            
+            if (responseMessages.length > 0) {
+              // Get the most recent response
+              const latestResponse = responseMessages[0];
+              console.log('Latest response:', latestResponse);
+              
+              // Get the content as a string
+              let responseContent;
+              try {
+                responseContent = typeof latestResponse.content === 'string' 
+                  ? latestResponse.content 
+                  : JSON.stringify(latestResponse.content, bigIntReplacer);
+                
+                console.log('Latest response content:', responseContent);
+              } catch (e) {
+                console.log('Error getting response content:', e);
+                responseContent = '';
+              }
+              
+              // Try to parse the message as JSON
+              try {
+                const responseJson = JSON.parse(responseContent);
+                console.log('Parsed JSON response:', responseJson);
+                
+                // Check if this is a valid response for our question
+                if (responseJson.uuid === questionUuid) {
+                  // If the response has a "correct" field, use it to determine if the answer is correct
+                  const isCorrect = responseJson.correct !== undefined 
+                    ? responseJson.correct 
+                    : responseJson.answer === answer;
+                  
+                  resolve({
+                    uuid: responseJson.uuid,
+                    answer: responseJson.answer || answer,
+                    explanation: responseJson.explanation || 'No explanation provided',
+                    audio_cid: responseJson.audio_cid,
+                    isCorrect
+                  });
+                  return;
+                }
+              } catch (e) {
+                console.log('Bot response is not valid JSON, using as plain text:', responseContent);
+                
+                // If it's not JSON, try to extract information from the text
+                // This is a fallback for plain text responses
+                const isCorrect = responseContent.toLowerCase().includes('correct');
+                
+                resolve({
+                  uuid: questionUuid,
+                  answer: answer,
+                  explanation: responseContent || 'No explanation provided',
+                  isCorrect
+                });
+                return;
+              }
+            }
+            
+            console.log('No valid response found, using fallback');
+            // Fallback response if no valid response is found
+            resolve({
+              uuid: questionUuid,
+              answer: 'a', // Default to 'a' as the correct answer
+              explanation: 'No response received from the bot. This is a fallback explanation.',
+              isCorrect: answer === 'a' // Assume 'a' is correct in offline mode
+            });
+          } catch (error) {
+            console.error('Error getting messages:', error);
+            // Fallback response on error
+            resolve({
+              uuid: questionUuid,
+              answer: 'a', // Default to 'a' as the correct answer
+              explanation: 'Error checking your answer. This is a fallback explanation.',
+              isCorrect: answer === 'a' // Assume 'a' is correct in offline mode
+            });
           }
-        } catch (fallbackError) {
-          console.error('Error in fallback message fetch:', fallbackError);
-        }
-        
-        return null;
-      }
-      
-      return response;
+        }, 3000); // Wait 3 seconds for a response
+      });
     } catch (error) {
       console.error('Error sending answer to bot:', error);
       return null;
     }
   };
   
-  // Helper function to wait for the bot's response
-  const waitForBotResponse = async (conversation: any, timeout: number): Promise<any> => {
-    console.log('Waiting for bot response...');
-    
-    // First, check if there are any existing messages that might be the response
-    // This helps in case the message arrived before we set up our listener
-    try {
-      console.log('Checking for existing messages...');
-      const existingMessages = await conversation.messages();
-      console.log(`Found ${existingMessages.length} existing messages`);
-      
-      // Look for recent messages from the bot (last 30 seconds)
-      const recentTime = new Date(Date.now() - 30000); // 30 seconds ago
-      const recentBotMessages = existingMessages.filter((msg: any) => 
-        msg.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase() && 
-        new Date(msg.sent) > recentTime
-      );
-      
-      if (recentBotMessages.length > 0) {
-        // Sort by timestamp to get the most recent message
-        recentBotMessages.sort((a: any, b: any) => 
-          new Date(b.sent).getTime() - new Date(a.sent).getTime()
-        );
-        const latestMessage = recentBotMessages[0];
-        console.log('Found recent bot message:', latestMessage.content);
-        return latestMessage.content;
-      }
-    } catch (error) {
-      console.error('Error checking existing messages:', error);
+  const handleAnswerSelect = async (answer: 'a' | 'b' | 'c' | 'd') => {
+    if (!currentQuestion) {
+      console.error('No current question available');
+      return;
     }
     
-    return new Promise((resolve) => {
-      let timeoutId: NodeJS.Timeout;
-      let streamCleanup: (() => void) | null = null;
-      
-      // Set up timeout
-      timeoutId = setTimeout(() => {
-        console.log('Bot response timeout reached');
-        if (streamCleanup) streamCleanup();
-        resolve(null);
-      }, timeout);
-      
-      // Try multiple approaches to receive messages
-      const setupMessageListener = async () => {
-        try {
-          console.log('Setting up message listener for bot responses');
-          
-          // Approach 1: Try using the stream method (XMTP v3 style)
-          if (conversation.stream && typeof conversation.stream === 'function') {
-            try {
-              const stream = conversation.stream((error: Error | null, message: any) => {
-                if (error) {
-                  console.error('Error in message stream:', error);
-                  return;
-                }
-                
-                if (!message) {
-                  console.log('No message received from stream');
-                  return;
-                }
-                
-                console.log('Received message from stream:', message);
-                
-                // Check if this is a response from the bot
-                if (message.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()) {
-                  clearTimeout(timeoutId);
-                  if (streamCleanup) streamCleanup();
-                  resolve(message.content);
-                }
-              });
-              
-              // Set up cleanup function
-              if (stream && typeof stream.unsubscribe === 'function') {
-                streamCleanup = () => stream.unsubscribe();
-              }
-              return;
-            } catch (streamError) {
-              console.error('Error setting up stream:', streamError);
-            }
-          }
-          
-          // Approach 2: Try using the streamAllMessages method (XMTP v2 style)
-          if (conversation.client && conversation.client.conversations && 
-              typeof conversation.client.conversations.streamAllMessages === 'function') {
-            try {
-              console.log('Trying streamAllMessages approach');
-              const allMessagesStream = await conversation.client.conversations.streamAllMessages();
-              
-              // Set up an async iterator to process messages
-              (async () => {
-                try {
-                  for await (const message of allMessagesStream) {
-                    console.log('Received message from streamAllMessages:', message);
-                    
-                    // Check if this message is from our conversation and from the bot
-                    if (message.conversation && message.conversation.topic === conversation.topic &&
-                        message.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()) {
-                      clearTimeout(timeoutId);
-                      if (streamCleanup) streamCleanup();
-                      resolve(message.content);
-                      break;
-                    }
-                  }
-                } catch (iteratorError) {
-                  console.error('Error in streamAllMessages iterator:', iteratorError);
-                }
-              })();
-              
-              // Set up cleanup function
-              streamCleanup = () => {
-                if (allMessagesStream && typeof allMessagesStream.return === 'function') {
-                  allMessagesStream.return();
-                }
-              };
-              return;
-            } catch (streamAllError) {
-              console.error('Error setting up streamAllMessages:', streamAllError);
-            }
-          }
-          
-          // Approach 3: Try using the on method (event emitter style)
-          if (conversation.on && typeof conversation.on === 'function') {
-            try {
-              console.log('Trying event emitter approach with .on()');
-              const messageHandler = (message: any) => {
-                console.log('Received message from event emitter:', message);
-                
-                // Check if this is a response from the bot
-                if (message.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()) {
-                  clearTimeout(timeoutId);
-                  if (conversation.off && typeof conversation.off === 'function') {
-                    conversation.off('message', messageHandler);
-                  }
-                  resolve(message.content);
-                }
-              };
-              
-              conversation.on('message', messageHandler);
-              
-              // Set up cleanup function
-              streamCleanup = () => {
-                if (conversation.off && typeof conversation.off === 'function') {
-                  conversation.off('message', messageHandler);
-                }
-              };
-              return;
-            } catch (onError) {
-              console.error('Error setting up on event listener:', onError);
-            }
-          }
-          
-          // Approach 4: Try using addEventListener (DOM-style event listener)
-          if (conversation.addEventListener && typeof conversation.addEventListener === 'function') {
-            try {
-              console.log('Trying DOM-style event listener approach');
-              const messageHandler = (event: any) => {
-                const message = event.detail || event;
-                console.log('Received message from addEventListener:', message);
-                
-                // Check if this is a response from the bot
-                if (message.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase()) {
-                  clearTimeout(timeoutId);
-                  conversation.removeEventListener('message', messageHandler);
-                  resolve(message.content);
-                }
-              };
-              
-              conversation.addEventListener('message', messageHandler);
-              
-              // Set up cleanup function
-              streamCleanup = () => {
-                conversation.removeEventListener('message', messageHandler);
-              };
-              return;
-            } catch (addEventListenerError) {
-              console.error('Error setting up addEventListener:', addEventListenerError);
-            }
-          }
-          
-          // If we get here, none of the approaches worked
-          console.log('Conversation does not support message listeners');
-          
-          // Set up polling as a last resort
-          let pollCount = 0;
-          const maxPolls = 15; // Poll for 15 seconds max (1 second intervals)
-          
-          const pollForMessages = async () => {
-            try {
-              console.log('Checking for existing messages...');
-              const messages = await conversation.messages();
-              console.log(`Found ${messages.length} existing messages`);
-              
-              // Look for very recent messages from the bot (last 5 seconds)
-              const recentTime = new Date(Date.now() - 5000); // 5 seconds ago
-              const recentBotMessages = messages.filter((msg: any) => 
-                msg.senderAddress?.toLowerCase() === SCARLETT_BOT_ADDRESS.toLowerCase() && 
-                new Date(msg.sent) > recentTime
-              );
-              
-              if (recentBotMessages.length > 0) {
-                // Sort by timestamp to get the most recent message
-                recentBotMessages.sort((a: any, b: any) => 
-                  new Date(b.sent).getTime() - new Date(a.sent).getTime()
-                );
-                const latestMessage = recentBotMessages[0];
-                console.log('Found recent bot message in poll:', latestMessage.content);
-                clearTimeout(timeoutId);
-                resolve(latestMessage.content);
-                return;
-              }
-              
-              // Continue polling if we haven't reached the max
-              pollCount++;
-              if (pollCount < maxPolls) {
-                setTimeout(pollForMessages, 1000);
-              }
-            } catch (pollError) {
-              console.error('Error polling for messages:', pollError);
-              pollCount++;
-              if (pollCount < maxPolls) {
-                setTimeout(pollForMessages, 1000);
-              }
-            }
-          };
-          
-          // Start polling
-          pollForMessages();
-        } catch (setupError) {
-          console.error('Error setting up message listeners:', setupError);
-        }
-      };
-      
-      // Start the listener setup
-      setupMessageListener();
+    setSelectedAnswer(answer);
+    setIsValidating(true);
+    setFeedback({
+      isCorrect: false,
+      explanation: 'Checking your answer...'
     });
+    
+    try {
+      // Send the answer to the bot and wait for a response
+      const botResponse = await sendAnswerToBot(answer, currentQuestion.uuid);
+      
+      console.log('Bot response received:', botResponse);
+      
+      let parsedResponse = null;
+      
+      // Try to parse the response if it's a string
+      if (botResponse && typeof botResponse === 'string') {
+        try {
+          parsedResponse = JSON.parse(botResponse);
+          console.log('Parsed string response:', parsedResponse);
+        } catch (e) {
+          console.error('Error parsing bot response string:', e);
+        }
+      } else if (botResponse && typeof botResponse === 'object') {
+        // If it's already an object, use it directly
+        parsedResponse = botResponse;
+        console.log('Using object response directly:', parsedResponse);
+      }
+      
+      // Create a fallback response if parsing failed or no response received
+      if (!parsedResponse) {
+        console.log('Using fallback response');
+        parsedResponse = {
+          uuid: currentQuestion.uuid,
+          answer: 'a', // Default to 'a' as the correct answer
+          explanation: 'No valid response received from the bot. This is a fallback explanation.',
+          isCorrect: answer === 'a' // Assume 'a' is correct in offline mode
+        };
+      }
+      
+      // Ensure the response has a uuid property
+      if (!parsedResponse.uuid) {
+        parsedResponse.uuid = currentQuestion.uuid;
+      }
+      
+      // Determine if the answer is correct
+      const isCorrect = parsedResponse.isCorrect !== undefined 
+        ? parsedResponse.isCorrect 
+        : parsedResponse.answer === answer;
+      
+      // Update feedback with the bot's response
+      setFeedback({
+        isCorrect,
+        explanation: parsedResponse.explanation || (isCorrect ? 'Correct!' : 'Incorrect'),
+        audioCid: parsedResponse.audio_cid
+      });
+      
+      // Play audio if available
+      if (parsedResponse.audio_cid) {
+        playAudio(parsedResponse.audio_cid);
+      } else if (isCorrect && audioRef.current) {
+        // Play a local correct audio if no specific audio is provided
+        const feedbackAudios = [
+          'fantastic-tai-bang-le.mp3',
+          'gan-de-piaoliang-well-done.mp3',
+          'hen-chuse-excellent.mp3',
+          'very-good-hen-hao.mp3'
+        ];
+        
+        const randomAudio = `/audio/feedback/${feedbackAudios[Math.floor(Math.random() * feedbackAudios.length)]}`;
+        playAudio(randomAudio);
+      }
+      
+      // Update FSRS card
+      try {
+        setQuestionAnswer(
+          currentQuestion.uuid, 
+          answer, 
+          isCorrect, 
+          {
+            uuid: currentQuestion.uuid,
+            answer: parsedResponse.answer || answer,
+            explanation: parsedResponse.explanation || 'No explanation provided',
+            audio_cid: parsedResponse.audio_cid
+          }
+        );
+      } catch (error) {
+        console.error('Error updating FSRS card:', error);
+      }
+      
+      // After a delay, go to the next question
+      setTimeout(() => {
+        if (currentIndex < totalQuestions - 1) {
+          handleNextQuestion();
+        }
+      }, 1500);
+    } catch (error) {
+      console.error('Error in handleAnswerSelect:', error);
+      setFeedback({
+        isCorrect: false,
+        explanation: 'Error checking your answer. Please try again.'
+      });
+    } finally {
+      setIsValidating(false);
+    }
   };
   
   const playAudio = (src: string) => {
