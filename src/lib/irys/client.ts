@@ -42,15 +42,20 @@ class IrysService {
   private webIrys: any = null;
   private isInitialized = false;
   private initPromise: Promise<void> | null = null;
+  private isDevnet = false; // Track whether we're using devnet
 
   /**
    * Initialize the Irys client with the provided Ethereum provider
    */
-  async init(provider: any): Promise<void> {
+  async init(provider: any, useDevnet = true): Promise<void> {
     // If already initializing, return the existing promise
     if (this.initPromise) {
       return this.initPromise;
     }
+
+    // Store the network configuration
+    this.isDevnet = useDevnet;
+    console.log(`IrysService: Using ${this.isDevnet ? 'devnet' : 'mainnet'}`);
 
     // If already initialized, return immediately
     if (this.isInitialized && this.webIrys) {
@@ -102,10 +107,15 @@ class IrysService {
       
       try {
         // Use WebUploader as a function (not a constructor)
-        this.webIrys = await WebUploader(WebEthereum)
-          .withAdapter(EthersV6Adapter(ethersProvider))
-          .devnet()
-          .build();
+        const builder = WebUploader(WebEthereum)
+          .withAdapter(EthersV6Adapter(ethersProvider));
+        
+        // Apply devnet configuration if needed
+        if (this.isDevnet) {
+          builder.devnet();
+        }
+        
+        this.webIrys = await builder.build();
         
         // Log the connected address
         const address = await signer.getAddress();
@@ -146,7 +156,7 @@ class IrysService {
     // Add metadata tags
     const tags = [
       { name: "Content-Type", value: "application/json" },
-      { name: "App-Name", value: "Scarlett-Tutor" },
+      { name: "App-Name", value: "Scarlett" },
       { name: "Type", value: "user-progress" },
       { name: "User-Id", value: progress.userId },
       { name: "Song-Id", value: progress.songId },
@@ -168,80 +178,89 @@ class IrysService {
    * Get the latest progress for a user and song
    */
   async getLatestProgress(userId: string, songId: string): Promise<UserProgress | null> {
+    console.log(`IrysService: Getting latest progress for userId=${userId}, songId=${songId}`);
+    
     try {
-      console.log(`IrysService: Getting latest progress for userId=${userId}, songId=${songId}`);
+      // Determine the GraphQL endpoint based on network configuration
+      const graphqlUrl = this.isDevnet 
+        ? 'https://devnet.irys.xyz/graphql' 
+        : 'https://uploader.irys.xyz/graphql';
       
-      // Construct the GraphQL query to find transactions with the right tags
-      const query = `
-        query {
-          transactions(
-            tags: [
-              { name: "App-Name", values: ["Scarlett-Tutor"] },
-              { name: "Type", values: ["user-progress"] },
-              { name: "User-Id", values: ["${userId}"] },
-              { name: "Song-Id", values: ["${songId}"] }
-            ],
-            order: "DESC",
-            limit: 1
-          ) {
-            edges {
-              node {
-                id
-                tags {
-                  name
-                  value
+      // Determine the gateway URL based on network configuration
+      const gatewayUrl = this.isDevnet 
+        ? 'https://devnet.irys.xyz' 
+        : 'https://gateway.irys.xyz';
+      
+      console.log(`IrysService: Using GraphQL endpoint: ${graphqlUrl}`);
+      
+      // Construct the GraphQL query with the correct format
+      const graphqlQuery = {
+        query: `
+          query {
+            transactions(
+              tags: [
+                { name: "App-Name", values: ["Scarlett"] },
+                { name: "Type", values: ["user-progress"] },
+                { name: "User-Id", values: ["${userId}"] },
+                { name: "Song-Id", values: ["${songId}"] }
+              ],
+              order: DESC,
+              limit: 1
+            ) {
+              edges {
+                node {
+                  id
                 }
               }
             }
           }
-        }
-      `;
+        `
+      };
       
-      // Execute the query against the Irys GraphQL endpoint (use devnet for Base Sepolia)
-      const response = await fetch('https://devnet.irys.xyz/graphql', {
+      console.log(`IrysService: Querying transactions with GraphQL`);
+      console.log(`IrysService: Query:`, graphqlQuery.query);
+      
+      // Execute the GraphQL query
+      const response = await fetch(graphqlUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify(graphqlQuery),
       });
       
       if (!response.ok) {
-        throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+        throw new Error(`GraphQL query failed: ${response.status} ${response.statusText}`);
       }
       
       const result = await response.json();
       
-      if (result.errors) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
-      }
-      
-      // Check if we have any transactions
-      if (!result.data?.transactions?.edges?.length) {
-        console.log(`IrysService: No progress found for userId=${userId}, songId=${songId}`);
+      // Check if we have any results
+      if (!result.data?.transactions?.edges || result.data.transactions.edges.length === 0) {
+        console.log('IrysService: No progress found for this user and song');
         return null;
       }
       
-      // Get the transaction ID
+      // Get the transaction ID from the first result
       const txId = result.data.transactions.edges[0].node.id;
-      console.log(`IrysService: Found transaction with ID: ${txId}`);
+      console.log(`IrysService: Found latest progress with txId=${txId}`);
       
-      // Fetch the transaction data
-      const dataResponse = await fetch(`https://devnet.irys.xyz/tx/${txId}/data`, {
-        method: 'GET',
-      });
+      // Fetch the actual data using the transaction ID
+      const dataUrl = `${gatewayUrl}/${txId}`;
+      console.log(`IrysService: Fetching data from ${dataUrl}`);
+      
+      const dataResponse = await fetch(dataUrl);
       
       if (!dataResponse.ok) {
-        throw new Error(`Failed to fetch transaction data: ${dataResponse.status} ${dataResponse.statusText}`);
+        throw new Error(`Data fetch failed: ${dataResponse.status} ${dataResponse.statusText}`);
       }
       
-      // Parse the JSON data
       const progressData = await dataResponse.json();
-      console.log(`IrysService: Retrieved progress data:`, progressData);
+      console.log(`IrysService: Successfully retrieved progress data with ${progressData.questions?.length || 0} questions`);
       
       return progressData as UserProgress;
     } catch (error) {
-      console.error('IrysService: Failed to get latest progress:', error);
+      console.error('IrysService: Error getting latest progress:', error);
       return null;
     }
   }
@@ -250,78 +269,89 @@ class IrysService {
    * Get all progress entries for a user
    */
   async getAllUserProgress(userId: string): Promise<UserProgress[]> {
+    console.log(`IrysService: Getting all progress for userId=${userId}`);
+    
     try {
-      console.log(`IrysService: Getting all progress for userId=${userId}`);
+      // Determine the GraphQL endpoint based on network configuration
+      const graphqlUrl = this.isDevnet 
+        ? 'https://devnet.irys.xyz/graphql' 
+        : 'https://uploader.irys.xyz/graphql';
       
-      // Construct the GraphQL query to find all transactions for this user
-      const query = `
-        query {
-          transactions(
-            tags: [
-              { name: "App-Name", values: ["Scarlett-Tutor"] },
-              { name: "Type", values: ["user-progress"] },
-              { name: "User-Id", values: ["${userId}"] }
-            ],
-            order: "DESC"
-          ) {
-            edges {
-              node {
-                id
-                tags {
-                  name
-                  value
+      // Determine the gateway URL based on network configuration
+      const gatewayUrl = this.isDevnet 
+        ? 'https://devnet.irys.xyz' 
+        : 'https://gateway.irys.xyz';
+      
+      console.log(`IrysService: Using GraphQL endpoint: ${graphqlUrl}`);
+      
+      // Construct the GraphQL query with the correct format
+      const graphqlQuery = {
+        query: `
+          query {
+            transactions(
+              tags: [
+                { name: "App-Name", values: ["Scarlett"] },
+                { name: "Type", values: ["user-progress"] },
+                { name: "User-Id", values: ["${userId}"] }
+              ],
+              order: DESC
+            ) {
+              edges {
+                node {
+                  id
+                  tags {
+                    name
+                    value
+                  }
                 }
               }
             }
           }
-        }
-      `;
+        `
+      };
       
-      // Execute the query against the Irys GraphQL endpoint
-      const response = await fetch('https://devnet.irys.xyz/graphql', {
+      console.log(`IrysService: Querying transactions with GraphQL`);
+      console.log(`IrysService: Query:`, graphqlQuery.query);
+      
+      // Execute the GraphQL query
+      const response = await fetch(graphqlUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query }),
+        body: JSON.stringify(graphqlQuery),
       });
       
       if (!response.ok) {
-        throw new Error(`GraphQL request failed: ${response.status} ${response.statusText}`);
+        throw new Error(`GraphQL query failed: ${response.status} ${response.statusText}`);
       }
       
       const result = await response.json();
       
-      if (result.errors) {
-        throw new Error(`GraphQL errors: ${JSON.stringify(result.errors)}`);
-      }
-      
-      // Check if we have any transactions
-      if (!result.data?.transactions?.edges?.length) {
-        console.log(`IrysService: No progress found for userId=${userId}`);
+      // Check if we have any results
+      if (!result.data?.transactions?.edges || result.data.transactions.edges.length === 0) {
+        console.log('IrysService: No progress found for this user');
         return [];
       }
       
-      // Get all transaction IDs
-      const txIds = result.data.transactions.edges.map((edge: any) => edge.node.id);
-      console.log(`IrysService: Found ${txIds.length} transactions`);
+      const transactions = result.data.transactions.edges.map((edge: any) => edge.node);
+      console.log(`IrysService: Found ${transactions.length} progress entries`);
       
-      // Fetch all transaction data in parallel
+      // Fetch all data in parallel
       const progressEntries = await Promise.all(
-        txIds.map(async (txId: string) => {
+        transactions.map(async (tx: any) => {
           try {
-            const dataResponse = await fetch(`https://devnet.irys.xyz/tx/${txId}/data`, {
-              method: 'GET',
-            });
+            const dataUrl = `${gatewayUrl}/${tx.id}`;
+            const dataResponse = await fetch(dataUrl);
             
             if (!dataResponse.ok) {
-              console.error(`Failed to fetch transaction data for ${txId}: ${dataResponse.status} ${dataResponse.statusText}`);
+              console.warn(`IrysService: Failed to fetch data for txId=${tx.id}`);
               return null;
             }
             
             return await dataResponse.json() as UserProgress;
           } catch (error) {
-            console.error(`Error fetching data for transaction ${txId}:`, error);
+            console.warn(`IrysService: Error fetching data for txId=${tx.id}:`, error);
             return null;
           }
         })
@@ -329,11 +359,11 @@ class IrysService {
       
       // Filter out any failed fetches
       const validEntries = progressEntries.filter((entry): entry is UserProgress => entry !== null);
-      console.log(`IrysService: Retrieved ${validEntries.length} valid progress entries`);
+      console.log(`IrysService: Successfully retrieved ${validEntries.length} progress entries`);
       
       return validEntries;
     } catch (error) {
-      console.error('IrysService: Failed to get all user progress:', error);
+      console.error('IrysService: Error getting all user progress:', error);
       return [];
     }
   }

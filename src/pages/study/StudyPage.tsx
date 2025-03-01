@@ -3,12 +3,15 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
 import { useQuestions } from '../../hooks/useQuestions';
-import { Play, Pause, ArrowRight, X, CaretLeft } from '@phosphor-icons/react';
+import { Play, Pause, ArrowRight, CaretLeft } from '@phosphor-icons/react';
 import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
 import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
 import { fsrsService } from '../../lib/fsrs/client';
+import FsrsDebugPanel from '../../components/debug/FsrsDebugPanel';
+import { logFsrsProgress, logIrysData } from '../../utils/fsrsDebugger';
+import { useAppKit } from '../../context/ReownContext';
 
 // Interface for the question answer JSON sent to XMTP
 interface QuestionAnswerRequest {
@@ -52,6 +55,8 @@ const StudyPage: React.FC = () => {
   const { song, loading: songLoading, error: songError } = useSongByTitle(title || null);
   const xmtp = useXmtp();
   const navigate = useNavigate();
+  const appKit = useAppKit();
+  const address = appKit?.address;
   
   // Add state to track the selected study language (which may be different from UI language)
   const [studyLanguage, setStudyLanguage] = useState<'en' | 'zh'>(currentLanguage);
@@ -94,8 +99,10 @@ const StudyPage: React.FC = () => {
   const [audioHasPlayed, setAudioHasPlayed] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [isXmtpReady, setIsXmtpReady] = useState(false);
-  const [xmtpConnectionAttempted, setXmtpConnectionAttempted] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  
+  // Add state for the debug panel
+  const [showDebugPanel, setShowDebugPanel] = useState(false);
   
   // Add state for tracking answered questions
   const [questionAnswers, setQuestionAnswers] = useState<Array<{
@@ -168,6 +175,48 @@ const StudyPage: React.FC = () => {
       audioRef.current.load();
     }
   }, [currentIndex]);
+  
+  // Effect to initialize FSRS service
+  useEffect(() => {
+    if (song && address) {
+      console.log('FSRS service will be used for song:', song.id);
+      // Note: FSRSService doesn't have an explicit init method
+      // It will be used when needed with the user's address and song ID
+    }
+  }, [song, address]);
+  
+  // Effect to log FSRS data for debugging
+  useEffect(() => {
+    if (song && address) {
+      console.log('Logging FSRS data for debugging...');
+      
+      // Log FSRS progress
+      logFsrsProgress(address, song.id.toString())
+        .then(data => {
+          if (data) {
+            console.log('FSRS progress data logged successfully');
+          } else {
+            console.warn('No FSRS progress data found or error logging data');
+          }
+        })
+        .catch(error => {
+          console.error('Error logging FSRS progress:', error);
+        });
+      
+      // Log raw Irys data
+      logIrysData(address, song.id.toString())
+        .then(data => {
+          if (data) {
+            console.log('Raw Irys data logged successfully');
+          } else {
+            console.warn('No raw Irys data found or error logging data');
+          }
+        })
+        .catch(error => {
+          console.error('Error logging raw Irys data:', error);
+        });
+    }
+  }, [song, address]);
   
   const handleAnswerSelect = async (answer: 'a' | 'b' | 'c' | 'd') => {
     if (selectedAnswer || feedback || isValidating || !currentQuestion || !song) return;
@@ -638,6 +687,11 @@ const StudyPage: React.FC = () => {
     }
   };
   
+  // Add a function to toggle the debug panel
+  const toggleDebugPanel = () => {
+    setShowDebugPanel(prev => !prev);
+  };
+  
   const loading = songLoading || questionsLoading;
   const error = songError || questionsError;
   
@@ -648,32 +702,26 @@ const StudyPage: React.FC = () => {
         <PageHeader
           leftIcon={<CaretLeft size={24} />}
           leftLink={`/song/${title}`}
-          title={t('study.title')}
+          title={t('study.loading')}
         />
-        <div className="flex flex-col items-center justify-center py-12">
-          <Spinner size="lg" color="primary" />
-          <p className="mt-4 text-neutral-400">{t('common.loading')}</p>
+        <div className="flex justify-center items-center h-64">
+          <Spinner size="lg" />
         </div>
       </div>
     );
   }
   
   // Return error state if there's an error
-  if (error || !song || !currentQuestion) {
+  if (error || !song) {
     return (
       <div className="container mx-auto px-4 py-6">
         <PageHeader
           leftIcon={<CaretLeft size={24} />}
           leftLink={`/song/${title}`}
-          title={t('study.title')}
+          title={t('study.error')}
         />
-        <div className="bg-red-900/20 text-red-400 p-6 rounded-lg text-center">
-          <X size={48} weight="bold" className="mx-auto mb-2" />
-          <h2 className="text-xl font-bold mb-2">{t('common.error')}</h2>
-          <p>{songError?.message || questionsError?.message || t('study.noQuestions')}</p>
-          <Link to={`/song/${title}`} className="mt-4 inline-block text-indigo-400">
-            {t('common.goBack')}
-          </Link>
+        <div className="bg-red-900 bg-opacity-30 text-red-300 p-4 rounded-lg mt-4">
+          {error ? (error instanceof Error ? error.message : String(error)) : t('study.songNotFound')}
         </div>
       </div>
     );
@@ -698,7 +746,6 @@ const StudyPage: React.FC = () => {
           <button
             onClick={() => {
               if (xmtp && !isXmtpConnecting) {
-                setXmtpConnectionAttempted(true);
                 setIsXmtpConnecting(true);
                 setXmtpConnectionError(null);
                 
@@ -712,7 +759,6 @@ const StudyPage: React.FC = () => {
                 try {
                   console.log('Attempting to connect to XMTP...');
                   
-                  // First check if we already have a client
                   if (xmtp.client) {
                     console.log('XMTP client already exists, setting ready state');
                     clearTimeout(connectionTimeout);
@@ -721,7 +767,72 @@ const StudyPage: React.FC = () => {
                     return;
                   }
                   
-                  if (xmtp.connectWithWagmi) {
+                  // Try connectWithEthers first, then fall back to connectWithWagmi
+                  if (xmtp.connectWithEthers) {
+                    xmtp.connectWithEthers()
+                      .then(connected => {
+                        clearTimeout(connectionTimeout);
+                        setIsXmtpConnecting(false);
+                        
+                        // Even if connected is false, check if client exists
+                        if (xmtp.client) {
+                          console.log('XMTP client exists after connection attempt');
+                          setIsXmtpReady(true);
+                          return;
+                        }
+                        
+                        if (!connected) {
+                          console.error('Failed to connect to XMTP with ethers, trying wagmi as fallback');
+                          // Try wagmi as fallback
+                          if (xmtp.connectWithWagmi) {
+                            xmtp.connectWithWagmi()
+                              .then(wagmiConnected => {
+                                if (xmtp.client || wagmiConnected) {
+                                  console.log('XMTP connected with wagmi fallback');
+                                  setIsXmtpReady(true);
+                                } else {
+                                  console.error('Failed to connect to XMTP with wagmi fallback');
+                                  setXmtpConnectionError(t('study.xmtpConnectionFailed'));
+                                }
+                              })
+                              .catch(wagmiError => {
+                                console.error('Error connecting to XMTP with wagmi fallback:', wagmiError);
+                                setXmtpConnectionError(wagmiError instanceof Error ? wagmiError.message : String(wagmiError));
+                              });
+                          } else {
+                            setXmtpConnectionError(t('study.xmtpConnectionFailed'));
+                          }
+                        } else {
+                          setIsXmtpReady(true);
+                        }
+                      })
+                      .catch(error => {
+                        console.error('Error connecting to XMTP with ethers:', error);
+                        clearTimeout(connectionTimeout);
+                        setIsXmtpConnecting(false);
+                        
+                        // Try wagmi as fallback
+                        console.log('Trying wagmi as fallback after ethers error');
+                        if (xmtp.connectWithWagmi) {
+                          xmtp.connectWithWagmi()
+                            .then(wagmiConnected => {
+                              if (xmtp.client || wagmiConnected) {
+                                console.log('XMTP connected with wagmi fallback');
+                                setIsXmtpReady(true);
+                              } else {
+                                console.error('Failed to connect to XMTP with wagmi fallback');
+                                setXmtpConnectionError(t('study.xmtpConnectionFailed'));
+                              }
+                            })
+                            .catch(wagmiError => {
+                              console.error('Error connecting to XMTP with wagmi fallback:', wagmiError);
+                              setXmtpConnectionError(wagmiError instanceof Error ? wagmiError.message : String(wagmiError));
+                            });
+                        } else {
+                          setXmtpConnectionError(error instanceof Error ? error.message : String(error));
+                        }
+                      });
+                  } else if (xmtp.connectWithWagmi) {
                     xmtp.connectWithWagmi()
                       .then(connected => {
                         clearTimeout(connectionTimeout);
@@ -747,10 +858,6 @@ const StudyPage: React.FC = () => {
                         setIsXmtpConnecting(false);
                         setXmtpConnectionError(error instanceof Error ? error.message : String(error));
                       });
-                  } else {
-                    clearTimeout(connectionTimeout);
-                    setIsXmtpConnecting(false);
-                    setXmtpConnectionError(t('study.xmtpConnectionNotAvailable'));
                   }
                 } catch (error) {
                   console.error('Failed to connect to XMTP:', error);
@@ -778,7 +885,6 @@ const StudyPage: React.FC = () => {
               <p className="text-sm">{xmtpConnectionError}</p>
               <button 
                 onClick={() => {
-                  setXmtpConnectionAttempted(false);
                   setXmtpConnectionError(null);
                 }}
                 className="mt-2 text-sm text-blue-400 hover:text-blue-300"
@@ -794,12 +900,25 @@ const StudyPage: React.FC = () => {
   
   // Main content - only shown when XMTP is connected
   return (
-    <div className="container mx-auto px-4 py-6">
+    <div className="container mx-auto px-4 py-6 min-h-screen flex flex-col">
       <PageHeader
         leftIcon={<CaretLeft size={24} />}
-        leftLink="/"
-        title={song?.song_title || t('loading')}
+        leftLink={`/song/${title}`}
+        title={song.song_title}
+        rightIcon={
+          <button 
+            onClick={toggleDebugPanel}
+            className="p-1 text-xs bg-neutral-700 hover:bg-neutral-600 text-neutral-300 rounded"
+            title="Debug FSRS Data"
+          >
+            Debug
+          </button>
+        }
       />
+      
+      <div className="text-sm text-neutral-400 mb-4">
+        {currentIndex + 1} / {totalQuestions}
+      </div>
       
       {/* Page header with back button and progress bar */}
       <div className="mb-8 flex items-center gap-4">
@@ -934,6 +1053,14 @@ const StudyPage: React.FC = () => {
       
       {/* Hidden audio element for playing sounds */}
       <audio ref={audioRef} className="hidden" />
+      
+      {/* Add the debug panel */}
+      {showDebugPanel && (
+        <FsrsDebugPanel 
+          songId={String(song.id)} 
+          onClose={() => setShowDebugPanel(false)} 
+        />
+      )}
     </div>
   );
 };

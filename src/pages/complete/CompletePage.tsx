@@ -2,14 +2,13 @@ import React, { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useSongByTitle } from '../../hooks/useSongs';
-import { Trophy, Share, House, Confetti } from '@phosphor-icons/react';
 import Spinner from '../../components/ui/Spinner';
 
 const CompletePage: React.FC = () => {
   const { title } = useParams<{ title: string }>();
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { song, loading, error } = useSongByTitle(title || null);
+  const { loading } = useSongByTitle(title || null);
   
   // Redirect to the confirmation page
   useEffect(() => {

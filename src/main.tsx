@@ -6,6 +6,7 @@ import ReownProvider from './context/ReownContext'
 import { XmtpProvider } from './context/XmtpContext'
 import initXmtpEnvironment from './utils/xmtpHelper'
 import { initIrysEnvironment } from './utils/irysHelper'
+import { initApiHandler } from './api/apiHandler'
 
 // Simple Buffer polyfill for XMTP and Irys
 if (typeof window !== 'undefined' && typeof window.Buffer === 'undefined') {
@@ -29,6 +30,9 @@ if (!hasSharedArrayBuffer || !hasAtomics) {
 
 // Initialize environments
 initXmtpEnvironment();
+
+// Initialize API handler
+initApiHandler();
 
 // Initialize Irys asynchronously
 (async () => {

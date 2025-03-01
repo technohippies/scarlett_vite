@@ -184,9 +184,10 @@ const ConfirmationPage: React.FC = () => {
       try {
         // Pass window.ethereum directly to Irys
         // This is what our updated client expects
-        await irysService.init(window.ethereum);
-        console.log('ConfirmationPage: Irys initialized successfully');
-        debugMessages.push('Irys initialized successfully');
+        // Set useDevnet to false to use mainnet
+        await irysService.init(window.ethereum, false);
+        console.log('ConfirmationPage: Irys initialized successfully (using mainnet)');
+        debugMessages.push('Irys initialized successfully (using mainnet)');
       } catch (err) {
         console.error('ConfirmationPage: Failed to initialize Irys:', err);
         debugMessages.push(`Failed to initialize Irys: ${err instanceof Error ? err.message : String(err)}`);
