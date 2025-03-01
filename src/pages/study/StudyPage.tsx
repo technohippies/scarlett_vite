@@ -537,19 +537,16 @@ const StudyPage: React.FC = () => {
         console.error('Error updating FSRS card:', error);
       }
       
-      // After a delay, go to the next question
-      setTimeout(() => {
-        if (currentIndex < totalQuestions - 1) {
-          handleNextQuestion();
-        }
-      }, 1500);
+      // Remove the automatic advancement to the next question
+      // Instead, show the feedback and let the user click the Next button when ready
+      setIsValidating(false);
+      
     } catch (error) {
       console.error('Error in handleAnswerSelect:', error);
       setFeedback({
         isCorrect: false,
         explanation: 'Error checking your answer. Please try again.'
       });
-    } finally {
       setIsValidating(false);
     }
   };
