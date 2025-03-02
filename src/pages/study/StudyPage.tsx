@@ -8,7 +8,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import { useXmtp } from '../../context/XmtpContext';
 import Spinner from '../../components/ui/Spinner';
 import { SCARLETT_BOT_ADDRESS } from '../../lib/constants';
-import { fsrsService } from '../../lib/fsrs/client';
+import { fsrsService, FSRSUserProgress } from '../../lib/fsrs/client';
 import FsrsDebugPanel from '../../components/debug/FsrsDebugPanel';
 import { logFsrsProgress, logIrysData } from '../../utils/fsrsDebugger';
 import { useAppKit } from '../../context/ReownContext';
@@ -77,7 +77,8 @@ const StudyPage: React.FC = () => {
     setQuestionAnswer,
     currentIndex,
     totalQuestions,
-    resetQuestions
+    resetQuestions,
+    questions
   } = useQuestions(questionsCid);
   
   // Reset questions when study language changes - FIXED: removed resetQuestions from dependency array
@@ -115,6 +116,7 @@ const StudyPage: React.FC = () => {
   
   // Add state for FSRS cards
   const [fsrsCards, setFsrsCards] = useState<Map<string, any>>(new Map());
+  const [fsrsProgress, setFsrsProgress] = useState<FSRSUserProgress | null>(null);
   
   // Add state for tracking XMTP connection status
   const [isXmtpConnecting, setIsXmtpConnecting] = useState(false);
@@ -176,12 +178,40 @@ const StudyPage: React.FC = () => {
     }
   }, [currentIndex]);
   
-  // Effect to initialize FSRS service
+  // Effect to initialize FSRS service and load previous progress
   useEffect(() => {
     if (song && address) {
       console.log('FSRS service will be used for song:', song.id);
-      // Note: FSRSService doesn't have an explicit init method
-      // It will be used when needed with the user's address and song ID
+      
+      // Load previous progress from Irys
+      const loadFsrsProgress = async () => {
+        try {
+          console.log(`Loading FSRS progress for user ${address} and song ${song.id}`);
+          const progress = await fsrsService.getLatestProgress(address, song.id.toString());
+          
+          if (progress) {
+            console.log(`Found previous FSRS progress with ${progress.questions.length} questions`);
+            setFsrsProgress(progress);
+            
+            // Initialize FSRS cards from progress
+            const cards = new Map<string, any>();
+            progress.questions.forEach(q => {
+              if (q.fsrs) {
+                cards.set(q.uuid, q.fsrs);
+              }
+            });
+            
+            console.log(`Initialized ${cards.size} FSRS cards from previous progress`);
+            setFsrsCards(cards);
+          } else {
+            console.log('No previous FSRS progress found');
+          }
+        } catch (error) {
+          console.error('Error loading FSRS progress:', error);
+        }
+      };
+      
+      loadFsrsProgress();
     }
   }, [song, address]);
   
@@ -217,6 +247,46 @@ const StudyPage: React.FC = () => {
         });
     }
   }, [song, address]);
+  
+  // Modify the useQuestions hook usage to apply FSRS ordering
+  useEffect(() => {
+    if (!song || !questions || questions.length === 0 || !fsrsProgress) {
+      // Skip if we don't have questions or FSRS progress yet
+      return;
+    }
+    
+    const applyFsrsOrdering = async () => {
+      try {
+        console.log('Applying FSRS ordering to questions');
+        
+        // Use the FSRS service to select questions
+        const orderedQuestions = await fsrsService.selectQuestions(questions);
+        
+        if (orderedQuestions && orderedQuestions.length > 0) {
+          console.log(`FSRS ordered ${orderedQuestions.length} questions`);
+          
+          // Since we can't directly set questions from the hook, we need to reset and
+          // then update each question individually or use a different approach
+          // This is a limitation of the current hook design
+          console.log('FSRS ordering applied, but cannot directly update questions array');
+          
+          // Instead of trying to replace the questions array, we could:
+          // 1. Use the ordered indices to navigate through questions
+          // 2. Create a mapping from original index to FSRS index
+          // 3. Modify the useQuestions hook to accept an ordering array
+          
+          // For now, log that we can't directly update the questions
+          console.log('Consider modifying the useQuestions hook to support reordering');
+        } else {
+          console.log('FSRS did not return any ordered questions, keeping original order');
+        }
+      } catch (error) {
+        console.error('Error applying FSRS ordering:', error);
+      }
+    };
+    
+    applyFsrsOrdering();
+  }, [questions, fsrsProgress, song]);
   
   // Function to send an answer to the bot and get a response
   const sendAnswerToBot = async (answer: string, questionUuid: string): Promise<any> => {
@@ -522,6 +592,34 @@ const StudyPage: React.FC = () => {
       
       // Update FSRS card
       try {
+        // Get the FSRS rating based on correctness
+        const rating = fsrsService.rateAnswer(isCorrect);
+        
+        // Get the current card if it exists
+        const currentCard = fsrsCards.get(currentQuestion.uuid);
+        
+        // Update the card with the new rating
+        const updatedCard = fsrsService.updateCard(currentCard, rating);
+        
+        console.log('Updated FSRS card:', updatedCard);
+        
+        // Update the FSRS cards map
+        const newFsrsCards = new Map(fsrsCards);
+        newFsrsCards.set(currentQuestion.uuid, updatedCard);
+        setFsrsCards(newFsrsCards);
+        
+        // Store the answer with FSRS data
+        const newAnswer = {
+          uuid: currentQuestion.uuid,
+          selectedAnswer: answer,
+          isCorrect,
+          timestamp: Date.now(),
+          fsrs: updatedCard
+        };
+        
+        setQuestionAnswers(prev => [...prev, newAnswer]);
+        
+        // Update the question answer in the questions array
         setQuestionAnswer(
           currentQuestion.uuid, 
           answer, 
@@ -533,6 +631,41 @@ const StudyPage: React.FC = () => {
             audio_cid: parsedResponse.audio_cid
           }
         );
+        
+        // Save progress to Irys
+        if (song && address) {
+          const progress = {
+            userId: address,
+            songId: song.id.toString(),
+            questions: [...questionAnswers, newAnswer].map(q => ({
+              uuid: q.uuid,
+              selectedAnswer: q.selectedAnswer,
+              isCorrect: q.isCorrect,
+              timestamp: q.timestamp,
+              fsrs: q.fsrs
+            })),
+            completedAt: Date.now(),
+            totalQuestions: questions.length,
+            correctAnswers: [...questionAnswers, newAnswer].filter(q => q.isCorrect).length,
+            accuracy: [...questionAnswers, newAnswer].filter(q => q.isCorrect).length / 
+                     [...questionAnswers, newAnswer].length
+          };
+          
+          console.log('Saving progress to Irys:', progress);
+          
+          // Save progress asynchronously - don't wait for it to complete
+          fsrsService.saveProgress(progress)
+            .then(txId => {
+              if (txId) {
+                console.log('Progress saved to Irys with transaction ID:', txId);
+              } else {
+                console.warn('Failed to save progress to Irys');
+              }
+            })
+            .catch(error => {
+              console.error('Error saving progress to Irys:', error);
+            });
+        }
       } catch (error) {
         console.error('Error updating FSRS card:', error);
       }
