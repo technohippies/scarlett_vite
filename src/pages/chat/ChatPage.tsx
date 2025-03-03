@@ -312,12 +312,12 @@ const ChatPage: React.FC = () => {
                 console.log('New message received:', message);
                 
                 // Add the message to our state
-                setChatMessages(prev => {
-                  // Check if we already have this message
+              setChatMessages(prev => {
+                // Check if we already have this message
                   const exists = prev.some(m => m.id === message.id);
                   if (exists) {
-                    return prev;
-                  }
+                  return prev;
+                }
                   return [...prev, message];
                 });
               },
@@ -360,11 +360,7 @@ const ChatPage: React.FC = () => {
         content: messageText,
         sender: 'user', // Simple string value to avoid type errors
         timestamp: new Date(),
-        isBot: false, // Explicitly mark as not a bot message
-        // Ensure it's not identified as a bot message
-        rawMessage: {
-          senderInboxId: 'user-temp-id' // This will not match botInboxId
-        },
+        isBot: true, // Force it to appear on the right side
         sending: true // Mark as sending
       } as any; // Use type assertion for the custom properties
       
@@ -417,9 +413,9 @@ const ChatPage: React.FC = () => {
       if (!botConversation || !xmtp) {
         console.error('No bot conversation or XMTP client available');
         setSendStatus('Error: No bot conversation available');
-        return;
-      }
-      
+      return;
+    }
+    
       // Set sending state
       setIsSendingMessage(true);
       
@@ -436,11 +432,7 @@ const ChatPage: React.FC = () => {
         content: 'Audio message',
         sender: 'user',
         timestamp: new Date(),
-        isBot: false, // Explicitly mark as not a bot message
-        // Ensure it's not identified as a bot message
-        rawMessage: {
-          senderInboxId: 'user-temp-id' // This will not match botInboxId
-        },
+        isBot: true, // Force it to appear on the right side
         sending: true // Mark as sending
       } as any;
       
@@ -455,9 +447,9 @@ const ChatPage: React.FC = () => {
       }
       
       // Create the attachment content
-      const attachment = {
-        filename: audioFile.name,
-        mimeType: audioFile.type,
+        const attachment = {
+          filename: audioFile.name,
+          mimeType: audioFile.type,
         data: new Uint8Array(await audioFile.arrayBuffer())
       };
       
@@ -639,7 +631,7 @@ const ChatPage: React.FC = () => {
       if (content === null || content === undefined) {
         return <p className="text-sm text-red-400">Empty message</p>;
       }
-            
+      
       // Check if this is an audio attachment
       if (isAudioAttachment(content)) {
         try {
@@ -712,12 +704,12 @@ const ChatPage: React.FC = () => {
                               '');
             
             if (audioUrl) {
-              return (
-                <AudioMessage 
-                  src={audioUrl} 
+          return (
+            <AudioMessage 
+              src={audioUrl} 
                   isOwnMessage={!msg.isBot}
-                />
-              );
+            />
+          );
             }
           }
         } catch (audioError) {
@@ -727,7 +719,7 @@ const ChatPage: React.FC = () => {
       }
       
       // Regular text message
-      return <p className="text-sm whitespace-pre-wrap break-words">{content}</p>;
+        return <p className="text-sm whitespace-pre-wrap break-words">{content}</p>;
     } catch (error) {
       console.error('Error in renderMessageContent:', error);
       return <p className="text-sm text-red-400">Error displaying message</p>;
@@ -828,9 +820,8 @@ const ChatPage: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {chatMessages.map(msg => {
             // Determine if this is a bot message by checking the senderInboxId
-            // For temporary messages (with sending=true), always treat as user messages
-            const isBotMessage = (msg as any).sending ? false : 
-                               (msg.isBot || (msg as any).rawMessage?.senderInboxId === botInboxId);
+            const isBotMessage = msg.isBot || 
+                               (msg as any).rawMessage?.senderInboxId === botInboxId;
             
             return (
               <div 
@@ -849,7 +840,7 @@ const ChatPage: React.FC = () => {
                   {renderMessageContent({...msg, isBot: isBotMessage} as ChatMessage)}
                   <div className="flex items-center justify-between mt-1">
                     <p className="text-xs opacity-70">
-                      {formatMessageTime(msg.timestamp)}
+                  {formatMessageTime(msg.timestamp)}
                     </p>
                     {(msg as any).sending && (
                       <div className="animate-spin ml-2 h-3 w-3 border-2 border-current rounded-full border-t-transparent opacity-70"></div>
@@ -857,10 +848,10 @@ const ChatPage: React.FC = () => {
                     {(msg as any).error && (
                       <span className="ml-2 text-red-400 text-xs">⚠️</span>
                     )}
-                  </div>
-                </div>
-                <MessageDebugPanel message={{...msg, isBot: isBotMessage}} />
               </div>
+            </div>
+                <MessageDebugPanel message={{...msg, isBot: isBotMessage}} />
+            </div>
             );
           })}
           
@@ -881,4 +872,4 @@ const ChatPage: React.FC = () => {
   );
 };
 
-export default ChatPage;
+export default ChatPage; 
