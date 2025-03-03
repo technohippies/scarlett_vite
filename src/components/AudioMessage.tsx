@@ -65,24 +65,24 @@ const AudioMessage: React.FC<AudioMessageProps> = ({
   const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
   
   return (
-    <div className={`flex flex-col p-2 rounded-lg max-w-xs ${
-      isOwnMessage ? 'bg-blue-500 text-white ml-auto' : 'bg-gray-200 text-gray-800'
+    <div className={`flex flex-col p-2 rounded-lg ${
+      isOwnMessage ? 'bg-indigo-600 text-white' : 'bg-neutral-800 text-white'
     }`}>
       <div className="flex items-center space-x-2">
         <button 
           onClick={togglePlay}
           className={`w-8 h-8 rounded-full flex items-center justify-center ${
-            isOwnMessage ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-300 hover:bg-gray-400'
-          }`}
+            isOwnMessage ? 'bg-indigo-700 hover:bg-indigo-800' : 'bg-neutral-700 hover:bg-neutral-600'
+          } text-white`}
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
-          {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+          {isPlaying ? <Pause size={18} weight="fill" /> : <Play size={18} weight="fill" />}
         </button>
         
         <div className="flex-1">
-          <div className="h-1 bg-gray-300 rounded-full overflow-hidden">
+          <div className="h-1 bg-gray-600 rounded-full overflow-hidden">
             <div 
-              className={`h-full ${isOwnMessage ? 'bg-blue-300' : 'bg-gray-500'}`} 
+              className={`h-full ${isOwnMessage ? 'bg-indigo-400' : 'bg-gray-400'}`} 
               style={{ width: `${progressPercentage}%` }}
             />
           </div>

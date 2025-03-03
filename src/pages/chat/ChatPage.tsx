@@ -459,12 +459,6 @@ const ChatPage: React.FC = () => {
     }
   };
   
-  const handleSendMessage = async (messageContent: string) => {
-    if (!messageContent.trim()) return;
-    
-    // Send the message to the bot
-    await sendMessageToBot(messageContent);
-  };
   
   // Connect to Reown only (first step)
   const handleConnectReown = async () => {
@@ -782,28 +776,34 @@ const ChatPage: React.FC = () => {
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Messages container */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {chatMessages.map(msg => (
-            <div 
-              key={msg.id} 
-              className={`flex ${
-                !msg.isBot ? 'justify-end' : 'justify-start'
-              } mb-4`}
-            >
+          {chatMessages.map(msg => {
+            // Determine if this is a bot message by checking the senderInboxId
+            const isBotMessage = msg.isBot || 
+                               (msg as any).rawMessage?.senderInboxId === botInboxId;
+            
+            return (
               <div 
-                className={`max-w-[80%] p-3 rounded-lg ${
-                  !msg.isBot 
-                    ? 'bg-indigo-600 text-white rounded-tr-none' 
-                    : 'bg-neutral-800 text-white rounded-tl-none'
-                }`}
+                key={msg.id} 
+                className={`flex ${
+                  !isBotMessage ? 'justify-start' : 'justify-end'
+                } mb-4`}
               >
-                {renderMessageContent(msg as ChatMessage)}
-                <p className="text-xs opacity-70 mt-1">
-                  {formatMessageTime(msg.timestamp)}
-                </p>
+                <div 
+                  className={`max-w-[80%] p-3 rounded-lg ${
+                    !isBotMessage 
+                      ? 'bg-neutral-800 text-white rounded-tl-none' 
+                      : 'bg-indigo-600 text-white rounded-tr-none'
+                  }`}
+                >
+                  {renderMessageContent({...msg, isBot: isBotMessage} as ChatMessage)}
+                  <p className="text-xs opacity-70 mt-1">
+                    {formatMessageTime(msg.timestamp)}
+                  </p>
+                </div>
+                <MessageDebugPanel message={{...msg, isBot: isBotMessage}} />
               </div>
-              <MessageDebugPanel message={msg} />
-            </div>
-          ))}
+            );
+          })}
 
           {sendStatus && (
             <div className={`p-2 rounded ${sendStatus.includes('Error') ? 'bg-red-900/20 text-red-400' : 'bg-blue-900/20 text-blue-400'}`}>
@@ -813,18 +813,9 @@ const ChatPage: React.FC = () => {
           
           <div ref={messagesEndRef} />
         </div>
-        
-        {/* Chat input */}
-        <div className="border-neutral-700 bg-neutral-900">
-          <ChatInput 
-            onSendMessage={handleSendMessage} 
-            onSendAudio={sendAudioAttachment}
-            placeholder={t('chat.placeholder')}
-          />
-        </div>
       </div>
     </div>
   );
 };
 
-export default ChatPage; 
+export default ChatPage;
