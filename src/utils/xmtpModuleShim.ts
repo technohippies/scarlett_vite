@@ -20,20 +20,20 @@ let attachmentModule: any = null;
 
 // Export the constants from the attachment module
 export const ContentTypeAttachment = {
-  toString: () => 'attachment',
-  sameAs: (other: any) => other && other.toString && other.toString() === 'attachment',
+  toString: () => 'xmtp.org/attachment:1.0',
+  sameAs: (other: any) => other && other.toString && other.toString() === 'xmtp.org/attachment:1.0',
   codec: () => new AttachmentCodec()
 };
 
 export const ContentTypeRemoteAttachment = {
-  toString: () => 'remote-attachment',
-  sameAs: (other: any) => other && other.toString && other.toString() === 'remote-attachment',
+  toString: () => 'xmtp.org/remote-attachment:1.0',
+  sameAs: (other: any) => other && other.toString && other.toString() === 'xmtp.org/remote-attachment:1.0',
   codec: () => new RemoteAttachmentCodec()
 };
 
 // Export the codecs
 export class AttachmentCodec {
-  contentType = 'attachment';
+  contentType = 'xmtp.org/attachment:1.0';
   
   encode(attachment: any) {
     if (attachmentModule && attachmentModule.AttachmentCodec) {
@@ -44,16 +44,29 @@ export class AttachmentCodec {
   }
   
   decode(data: any) {
-    if (attachmentModule && attachmentModule.AttachmentCodec) {
-      const codec = new attachmentModule.AttachmentCodec();
-      return codec.decode(data);
+    // Prevent infinite recursion by checking if this is a repeated call
+    if (attachmentModule && attachmentModule.AttachmentCodec && !AttachmentCodec.isDecoding) {
+      try {
+        // Set a flag to prevent recursive calls
+        AttachmentCodec.isDecoding = true;
+        const codec = new attachmentModule.AttachmentCodec();
+        const result = codec.decode(data);
+        return result;
+      } finally {
+        // Clear the flag when done
+        AttachmentCodec.isDecoding = false;
+      }
     }
+    // Fallback: just return the data
     return data;
   }
+  
+  // Static property to prevent recursive calls
+  static isDecoding = false;
 }
 
 export class RemoteAttachmentCodec {
-  contentType = 'remote-attachment';
+  contentType = 'xmtp.org/remote-attachment:1.0';
   
   encode(attachment: any) {
     if (attachmentModule && attachmentModule.RemoteAttachmentCodec) {
@@ -64,12 +77,25 @@ export class RemoteAttachmentCodec {
   }
   
   decode(data: any) {
-    if (attachmentModule && attachmentModule.RemoteAttachmentCodec) {
-      const codec = new attachmentModule.RemoteAttachmentCodec();
-      return codec.decode(data);
+    // Prevent infinite recursion by checking if this is a repeated call
+    if (attachmentModule && attachmentModule.RemoteAttachmentCodec && !RemoteAttachmentCodec.isDecoding) {
+      try {
+        // Set a flag to prevent recursive calls
+        RemoteAttachmentCodec.isDecoding = true;
+        const codec = new attachmentModule.RemoteAttachmentCodec();
+        const result = codec.decode(data);
+        return result;
+      } finally {
+        // Clear the flag when done
+        RemoteAttachmentCodec.isDecoding = false;
+      }
     }
+    // Fallback: just return the data
     return data;
   }
+  
+  // Static property to prevent recursive calls
+  static isDecoding = false;
   
   static async load(data: any) {
     if (attachmentModule && attachmentModule.RemoteAttachmentCodec) {

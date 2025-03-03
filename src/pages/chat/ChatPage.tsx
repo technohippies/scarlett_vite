@@ -67,6 +67,7 @@ const ChatPage: React.FC = () => {
   const [isReownConnected, setIsReownConnected] = useState(false);
   const [reownSigner, setReownSigner] = useState<any>(null);
   const [connectionError, setConnectionError] = useState<Error | null>(null);
+  const [messageStream, setMessageStream] = useState<any>(null);
   
   // Check if user is connected to Reown on mount
   useEffect(() => {
@@ -157,32 +158,51 @@ const ChatPage: React.FC = () => {
     }
     
     try {
+      console.log('XMTP connected, loading bot conversation');
       setSendStatus('Loading conversation with Scarlett bot...');
       
       // Get our wallet address and inbox ID for comparison
-      // Use type assertion for client - the XMTP Client type doesn't expose address directly in TypeScript
-      // but it is available at runtime
-      const xmtpClient = xmtp.client as any;
-      let walletAddress = '';
-      
-      try {
-        // Try to get the address from the client
-        walletAddress = await xmtpClient.address;
-        console.log('Our wallet address:', walletAddress);
-      } catch (error) {
-        console.warn('Could not get wallet address from XMTP client:', error);
-      }
-      
-      // Try to get our inbox ID from the client if available
       let ourInboxId = null;
       try {
-        // This is a guess at the property name - may need adjustment based on actual SDK
-        if (xmtpClient.inboxId) {
-          ourInboxId = xmtpClient.inboxId;
+        const xmtpClient = xmtp.client;
+        // Use type assertion for client properties
+        console.log('Our wallet address:', (xmtpClient as any).address);
+        
+        if ((xmtpClient as any).inboxId) {
+          ourInboxId = (xmtpClient as any).inboxId;
           console.log('Our inbox ID:', ourInboxId);
         }
       } catch (error) {
         console.log('Could not get our inbox ID:', error);
+      }
+      
+      // Check if attachment codec is registered
+      let attachmentCodecPresent = false;
+      try {
+        // Try to access the codec via different methods depending on the SDK version
+        const client = xmtp.client as any;
+        
+        // Method 1: Check contentTypeRegistry first
+        if (client.contentTypeRegistry && typeof client.contentTypeRegistry.codecFor === 'function') {
+          const codec = client.contentTypeRegistry.codecFor({
+            toString: () => 'xmtp.org/attachment:1.0',
+            sameAs: (other: any) => other.toString() === 'xmtp.org/attachment:1.0'
+          });
+          attachmentCodecPresent = !!codec;
+          console.log('Attachment codec found in contentTypeRegistry:', attachmentCodecPresent);
+        } 
+        // Method 2: Check codecs array if exists
+        else if (client.codecs && Array.isArray(client.codecs)) {
+          attachmentCodecPresent = client.codecs.some((codec: any) => 
+            codec.contentType === 'xmtp.org/attachment:1.0');
+          console.log('Attachment codec found in codecs array:', attachmentCodecPresent);
+        }
+        
+        if (!attachmentCodecPresent) {
+          console.warn('Attachment codec not registered yet. Messages with attachments may fail to load.');
+        }
+      } catch (error) {
+        console.warn('Error checking for attachment codec:', error);
       }
       
       // Use the createBotConversation method to ensure we always use the same conversation
@@ -208,19 +228,89 @@ const ChatPage: React.FC = () => {
       
       // Load messages from this conversation
       try {
-        const messages = await conversation.messages();
-        console.log(`Loaded ${messages.length} messages from conversation`);
+        let messages = [];
+        try {
+          if (!attachmentCodecPresent) {
+            console.warn('Loading messages without attachment codec. Some messages may fail to load.');
+          }
+          
+          messages = await conversation.messages();
+          console.log(`Loaded ${messages.length} messages from conversation`);
+        } catch (codecError: unknown) {
+          // Check if this is a codec error
+          if (codecError instanceof Error && codecError.message.includes('Codec not found')) {
+            console.error('Error loading messages due to missing codec:', codecError);
+            
+            // Try to register the codec manually as a last resort
+            try {
+              // Late import the module to register it directly
+              const { AttachmentCodec, RemoteAttachmentCodec } = await import('@xmtp/content-type-remote-attachment');
+              
+              if (xmtp.client && typeof (xmtp.client as any).registerCodec === 'function') {
+                console.log('Attempting emergency codec registration...');
+                (xmtp.client as any).registerCodec(new AttachmentCodec());
+                (xmtp.client as any).registerCodec(new RemoteAttachmentCodec());
+                
+                // Backup approach: if client has a codecFor method that's failing, let's try to patch it
+                if ((xmtp.client as any).codecFor) {
+                  console.log('Patching codecFor method as emergency fallback');
+                  const originalCodecFor = (xmtp.client as any).codecFor;
+                  
+                  // Create patched version that handles missing codecs
+                  (xmtp.client as any).codecFor = function(contentType: any) {
+                    try {
+                      // Try the original method first
+                      return originalCodecFor.call(this, contentType);
+                    } catch (error) {
+                      console.warn('CodecFor error, using fallback:', error);
+                      
+                      // Handle attachment content types
+                      const contentTypeStr = contentType?.toString() || '';
+                      if (contentTypeStr.includes('attachment:1.0')) {
+                        console.log('Using fallback attachment codec');
+                        return new AttachmentCodec();
+                      }
+                      if (contentTypeStr.includes('remote-attachment:1.0')) {
+                        console.log('Using fallback remote attachment codec');
+                        return new RemoteAttachmentCodec();
+                      }
+                      
+                      // Re-throw for other codec types
+                      throw error;
+                    }
+                  };
+                }
+                
+                // Try loading messages again
+                console.log('Retrying message load after emergency codec registration');
+                messages = await conversation.messages();
+                console.log(`Successfully loaded ${messages.length} messages after codec registration`);
+              } else {
+                // Fall back to empty messages
+                console.warn('Cannot register codec: registerCodec method not available');
+                setSendStatus('Connected to bot, but could not load messages with attachments. Continuing with empty message list.');
+                messages = []; // Continue with empty messages
+              }
+            } catch (emergencyError) {
+              console.error('Emergency codec registration failed:', emergencyError);
+              setSendStatus('Connected to bot, but could not load messages with attachments. Continuing with empty message list.');
+              messages = []; // Continue with empty messages
+            }
+          } else {
+            // Not a codec error, might be something else
+            throw codecError;
+          }
+        }
         
         // Create a local array to accumulate formatted messages
         const processedMessages: any[] = [];
         
-        // Map messages to our format with enhanced logging
-        const formattedMessages = messages.map((msg: any) => {
+        // Process messages one by one to await content promises
+        for (const msg of messages) {
           try {
-            // Log full message object for debugging
+            // Log basic message info for debugging (without content that might be a Promise)
             console.log('Processing message:', {
-          id: msg.id,
-          content: msg.content,
+              id: msg.id,
               senderAddress: msg.senderAddress,
               recipientAddress: msg.recipientAddress,
               sent: msg.sent,
@@ -248,193 +338,120 @@ const ChatPage: React.FC = () => {
             }
             
             // Use the helper function to determine if message is from bot
-            // Pass the accumulated messages so far for context
-            const isFromBot = isBotMessage(msg, walletAddress);
+            const isFromBot = isBotMessage(msg, botInboxId);
             
-            const formattedMessage = {
-              id: msg.id || Date.now().toString(),
-              content: typeof msg.content === 'object' ? JSON.stringify(msg.content) : msg.content,
+            // Handle content which might be a Promise
+            let resolvedContent;
+            try {
+              // Check if content is a Promise and await it
+              if (msg.content && typeof msg.content.then === 'function') {
+                console.log('Message content is a Promise, resolving...');
+                resolvedContent = await msg.content;
+                console.log('Resolved content:', resolvedContent);
+              } else {
+                resolvedContent = msg.content;
+              }
+            } catch (contentError) {
+              console.error('Error resolving message content:', contentError);
+              resolvedContent = 'Error: Could not load message content';
+            }
+            
+            // Add the formatted message to our array
+            processedMessages.push({
+              id: msg.id,
+              content: resolvedContent,
               sender: isFromBot ? 'bot' : 'user',
-              timestamp: new Date(msg.sent || Date.now())
-            };
-            
-            // Add this formatted message to our accumulator for context in future messages
-            processedMessages.push(formattedMessage);
-            
-            console.log('Formatted message:', formattedMessage);
-            return formattedMessage;
-          } catch (msgError) {
-            console.error('Error formatting message:', msgError, msg);
-            // Return a fallback message object
-            return {
+              timestamp: msg.sent || new Date()
+            });
+          } catch (formatError) {
+            console.error('Error formatting message:', formatError, msg);
+            // Add a placeholder for messages we can't format
+            processedMessages.push({
               id: msg.id || Date.now().toString(),
-              content: typeof msg.content === 'string' ? msg.content : 'Error displaying message content',
+              content: 'Error displaying message',
               sender: 'user', // Default to user if we can't determine
               timestamp: new Date()
-            };
+            });
           }
-        });
+        }
         
         // Show all messages
-        setChatMessages(formattedMessages);
+        setChatMessages(processedMessages);
         setSendStatus(null);
       } catch (messagesError) {
         console.error('Error loading messages:', messagesError);
         setChatMessages([]);
         setSendStatus('Connected to bot, but could not load previous messages');
       }
+      
+      // Set up message stream
+      try {
+        if (conversation.streamMessages) {
+          const stream = await conversation.streamMessages();
+          setMessageStream(stream);
+          
+          // Register the message handler
+          const onMessage = async (msg: any) => {
+            console.log('New message received:', msg);
+            
+            try {
+              // Determine if message is from bot
+              const isFromBot = isBotMessage(msg, botInboxId);
+              
+              // Handle content which might be a Promise
+              let resolvedContent;
+              try {
+                // Check if content is a Promise and await it
+                if (msg.content && typeof msg.content.then === 'function') {
+                  console.log('Stream message content is a Promise, resolving...');
+                  resolvedContent = await msg.content;
+                  console.log('Resolved stream message content:', resolvedContent);
+                } else {
+                  resolvedContent = msg.content;
+                }
+              } catch (contentError) {
+                console.error('Error resolving stream message content:', contentError);
+                resolvedContent = 'Error: Could not load message content';
+              }
+              
+              // Format the message
+              const formattedMessage = {
+                id: msg.id,
+                content: resolvedContent,
+                sender: isFromBot ? 'bot' : 'user',
+                timestamp: msg.sent || new Date()
+              };
+              
+              // Add to chat messages
+              setChatMessages(prev => [...prev, formattedMessage]);
+            } catch (error) {
+              console.error('Error processing new message:', error);
+            }
+          };
+          
+          // Register the message handler
+          stream.on('message', onMessage);
+          
+          // Return cleanup function
+          return () => {
+            if (stream.off) {
+              stream.off('message', onMessage);
+            }
+            if (stream.close) {
+              stream.close();
+            }
+          };
+        } else {
+          console.warn('Conversation does not support streaming messages');
+        }
+      } catch (streamError) {
+        console.error('Error setting up message stream:', streamError);
+      }
     } catch (error) {
       console.error('Error loading bot conversation:', error);
       setSendStatus(`Error: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
-  
-  // Add a message listener to the conversation
-  useEffect(() => {
-    if (botConversation) {
-      console.log('Setting up message stream for bot conversation');
-      
-      let cleanup: (() => void) | null = null;
-      
-      // Get our wallet address and inbox ID for comparison
-      const getWalletAddress = async () => {
-        if (xmtp?.client) {
-          return await (xmtp.client as any).address;
-        }
-        return null;
-      };
-      
-      // Try to get our inbox ID
-      const getOurInboxId = async () => {
-        if (xmtp?.client && xmtp.client.inboxId) {
-          return xmtp.client.inboxId;
-        }
-        return null;
-      };
-      
-      // Create a stream of messages
-      try {
-        // Use the stream method instead of streamMessages
-        const stream = botConversation.stream(async (error: Error | null, message: any) => {
-          if (error) {
-            console.error('Error in message stream:', error);
-            return;
-          }
-          
-          if (!message) {
-            console.log('No message received from stream');
-            return;
-          }
-          
-          // Log the raw message with any XMTP v3 specific fields we can find
-          console.log('New message received:', {
-            id: message.id,
-            content: message.content,
-            senderAddress: message.senderAddress,
-            recipientAddress: message.recipientAddress,
-            sent: message.sent,
-            messageVersion: message.messageVersion,
-            contentTopic: message.contentTopic,
-            direction: message.direction,
-            conversationId: message.conversationId,
-            // Add any XMTP v3 specific fields
-            senderInboxId: message.senderInboxId,
-            recipientInboxId: message.recipientInboxId,
-            // Add timestamp for debugging
-            receivedAt: new Date().toISOString()
-          });
-          
-          // Get our wallet address and inbox ID
-          const walletAddress = await getWalletAddress();
-          console.log('Our wallet address for stream message:', walletAddress);
-          
-          const ourInboxId = await getOurInboxId();
-          if (ourInboxId) {
-            message.ourInboxId = ourInboxId;
-            console.log('Our inbox ID for stream message:', ourInboxId);
-          }
-          
-          // For XMTP v3, we need to determine if this is a message we sent or received
-          // If we don't have direction information, try to infer it
-          if (!message.direction) {
-            // In XMTP v3, we can sometimes determine direction by comparing inbox IDs
-            if (message.senderInboxId && ourInboxId) {
-              message.direction = message.senderInboxId === ourInboxId ? 'sent' : 'received';
-              console.log(`Inferred message direction: ${message.direction} based on inbox ID comparison`);
-            }
-          }
-          
-          // Only add the message if it's not already in the chat
-          setChatMessages(prev => {
-            // Check if this message already exists in our chat by ID
-            const messageExists = prev.some(msg => msg.id === message.id);
-            
-            // For user messages coming from the stream, we need to be extra careful about duplicates
-            const isFromBot = isBotMessage(message, walletAddress);
-            
-            // If this is a user message, check for duplicates by content
-            if (!isFromBot && !messageExists) {
-              // Check if this message content matches any recent user message
-              const recentUserMessageWithSameContent = prev.find(msg => 
-                msg.sender === 'user' && 
-                msg.content === message.content &&
-                // Only consider messages sent in the last 30 seconds as potential duplicates
-                (new Date().getTime() - msg.timestamp.getTime() < 30000)
-              );
-              
-              if (recentUserMessageWithSameContent) {
-                console.log('Detected duplicate user message, skipping:', {
-                  streamMessage: message.content,
-                  existingMessage: recentUserMessageWithSameContent
-                });
-                return prev; // Don't add this message
-              }
-            }
-            
-            console.log('Message exists check:', {
-              messageContent: message.content,
-              exists: messageExists,
-              isFromBot,
-              prevMessages: prev.map(m => ({id: m.id, content: m.content.substring(0, 20) + '...', sender: m.sender}))
-            });
-            
-            if (!messageExists) {
-              const formattedMessage = {
-                id: message.id || Date.now().toString(),
-                content: typeof message.content === 'object' ? JSON.stringify(message.content) : message.content,
-                sender: isFromBot ? 'bot' : 'user',
-                timestamp: new Date(message.sent || Date.now()),
-                fromStream: true // Flag to indicate this message came from the stream
-              };
-              
-              console.log('Formatted message:', formattedMessage);
-              
-              // Add the new message to the chat
-              return [...prev, formattedMessage];
-            }
-            
-            return prev;
-          });
-        });
-        
-        cleanup = () => {
-          console.log('Cleaning up message stream');
-          if (stream && typeof stream.unsubscribe === 'function') {
-            stream.unsubscribe();
-          }
-        };
-      } catch (error) {
-        console.error('Error creating message stream:', error);
-      }
-      
-      // Clean up function will be called when component unmounts or conversation changes
-      return () => {
-        if (cleanup) {
-          cleanup();
-        }
-      };
-    }
-  }, [botConversation]);
   
   // Function to send a message to the bot
   const sendMessageToBot = async (messageContent: string) => {
@@ -689,30 +706,133 @@ const ChatPage: React.FC = () => {
   // Function to render message content based on type
   const renderMessageContent = (msg: any) => {
     try {
-      // Check if it's an audio message
-      if (isAudioAttachment(msg.content)) {
-        const content = typeof msg.content === 'string' 
-          ? JSON.parse(msg.content) 
-          : msg.content;
-        
-        return (
-          <AudioMessage 
-            src={content.url || URL.createObjectURL(new Blob([content.data], { type: content.mimeType }))} 
-            filename={content.filename || 'Audio message'} 
-            isOwnMessage={msg.sender !== 'bot'}
-          />
-        );
+      const { content } = msg;
+      
+      // Handle null or undefined content
+      if (content === null || content === undefined) {
+        return <p className="text-sm text-red-400">Empty message</p>;
       }
       
-      // Default text message
-      return (
-        <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
-      );
+      // Special case: Check for Promise content (shouldn't happen but just in case)
+      if (content && typeof content.then === 'function') {
+        return <p className="text-sm text-yellow-400">Loading message content...</p>;
+      }
+      
+      // Check if this is an audio attachment
+      if (isAudioAttachment(content)) {
+        try {
+          const audioContent = typeof content === 'string' 
+            ? JSON.parse(content) 
+            : content;
+          
+          // Create safe audio URL
+          const audioUrl = audioContent.url || 
+            (audioContent.data ? URL.createObjectURL(new Blob([audioContent.data], { type: audioContent.mimeType || 'audio/mpeg' })) : '');
+          
+          if (!audioUrl) {
+            return <p className="text-sm text-red-400">Invalid audio attachment</p>;
+          }
+          
+          return (
+            <AudioMessage 
+              src={audioUrl} 
+              filename={audioContent.filename || 'Audio message'} 
+              isOwnMessage={msg.sender !== 'bot'}
+            />
+          );
+        } catch (audioError) {
+          console.error('Error rendering audio message:', audioError);
+          return <p className="text-sm text-red-400">Error displaying audio message</p>;
+        }
+      }
+      
+      // Handle string content (most common case)
+      if (typeof content === 'string') {
+        if (!content.trim()) {
+          return <p className="text-sm text-gray-400">[Empty message]</p>;
+        }
+        return <p className="text-sm whitespace-pre-wrap break-words">{content}</p>;
+      }
+      
+      // If content is an object but not an attachment, extract text or stringify it
+      if (typeof content === 'object' && content !== null) {
+        // Extract text content from common properties, checking each property
+        const textProperties = ['content', 'text', 'message', 'value', 'body', 'data', 'description'];
+        
+        for (const prop of textProperties) {
+          if (content[prop] && typeof content[prop] === 'string') {
+            return <p className="text-sm whitespace-pre-wrap break-words">{content[prop]}</p>;
+          }
+        }
+        
+        // Handle system messages
+        if (content.initiatedByInboxId || content.systemMessage || content.type === 'system') {
+          const systemText = content.text || content.message || content.body || 'System message';
+          return <p className="text-sm italic text-gray-400">{systemText}</p>;
+        }
+        
+        // For arrays, try to join items if they're strings
+        if (Array.isArray(content)) {
+          if (content.length === 0) {
+            return <p className="text-sm text-gray-400">[Empty array]</p>;
+          }
+          
+          if (content.every(item => typeof item === 'string')) {
+            return <p className="text-sm whitespace-pre-wrap break-words">{content.join(', ')}</p>;
+          }
+        }
+        
+        // Last resort: stringify the object safely, avoiding circular references
+        try {
+          const cache: any[] = [];
+          const safeStringify = (obj: any): string => {
+            return JSON.stringify(obj, (key, value) => {
+              if (typeof value === 'object' && value !== null) {
+                if (cache.includes(value)) return '[Circular]';
+                cache.push(value);
+              }
+              return value;
+            }, 2);
+          };
+          
+          const stringified = safeStringify(content);
+          if (stringified === '{}') {
+            return <p className="text-sm text-gray-400">[Empty object]</p>;
+          }
+          
+          return <p className="text-sm font-mono text-xs whitespace-pre-wrap break-words overflow-x-auto">{stringified}</p>;
+        } catch (stringifyError) {
+          console.error('Error stringifying object:', stringifyError);
+          return <p className="text-sm text-red-400">Complex object (cannot display)</p>;
+        }
+      }
+      
+      // Fallback for other types
+      return <p className="text-sm text-gray-400">[Unsupported content type: {typeof content}]</p>;
     } catch (error) {
-      console.error('Error rendering message:', error);
+      console.error('Error in renderMessageContent:', error);
       return <p className="text-sm text-red-400">Error displaying message</p>;
     }
   };
+  
+  // Clean up message stream when component unmounts
+  useEffect(() => {
+    return () => {
+      if (messageStream) {
+        console.log('Cleaning up message stream');
+        try {
+          if (typeof messageStream.off === 'function') {
+            messageStream.off('message');
+          }
+          if (typeof messageStream.close === 'function') {
+            messageStream.close();
+          }
+        } catch (error) {
+          console.error('Error cleaning up message stream:', error);
+        }
+      }
+    };
+  }, [messageStream]);
   
   if (!xmtp?.isConnected) {
     return (
@@ -780,43 +900,43 @@ const ChatPage: React.FC = () => {
       {/* Chat container */}
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Messages container */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {chatMessages.map(msg => (
-                    <div 
-                      key={msg.id} 
+            <div 
+              key={msg.id} 
               className={`flex ${msg.sender === 'bot' ? 'justify-start' : 'justify-end'}`}
-                    >
-                      <div 
-                        className={`max-w-[80%] rounded-lg px-3 py-2 ${
+            >
+              <div 
+                className={`max-w-[80%] rounded-lg px-3 py-2 ${
                   msg.sender === 'bot' 
                     ? 'bg-neutral-700 text-white' 
-                            : 'bg-indigo-600 text-white'
-                        }`}
-                      >
-                        <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
-                        <p className="text-xs opacity-70 mt-1">
+                    : 'bg-indigo-600 text-white'
+                }`}
+              >
+                {renderMessageContent(msg)}
+                <p className="text-xs opacity-70 mt-1">
                   {formatMessageTime(msg.timestamp)}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
+                </p>
+              </div>
+            </div>
+          ))}
 
           {sendStatus && (
             <div className={`p-2 rounded ${sendStatus.includes('Error') ? 'bg-red-900/20 text-red-400' : 'bg-blue-900/20 text-blue-400'}`}>
               {sendStatus}
-                    </div>
-                  )}
+            </div>
+          )}
           
           <div ref={messagesEndRef} />
-                </div>
-                
+        </div>
+        
         {/* Chat input */}
         <div className="border-neutral-700 bg-neutral-900">
-                <ChatInput 
-                  onSendMessage={handleSendMessage} 
-                  onSendAudio={sendAudioAttachment}
-                  placeholder={t('chat.placeholder')}
-                />
+          <ChatInput 
+            onSendMessage={handleSendMessage} 
+            onSendAudio={sendAudioAttachment}
+            placeholder={t('chat.placeholder')}
+          />
         </div>
       </div>
     </div>

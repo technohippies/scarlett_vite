@@ -164,34 +164,228 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
           isLoaded: true
         });
         logger.info('Attachment module loaded successfully');
+        
+        // If client is already available, register codecs immediately
+        if (client) {
+          registerCodecs(client, module);
+        }
       } catch (error) {
         logger.error('Failed to load attachment module:', error);
       }
     };
     
     loadAttachmentModule();
-  }, []);
+  }, [client]); // Add client as a dependency to reload when client changes
   
-  // Register codecs when client is created
-  useEffect(() => {
-    if (client && attachmentModule.isLoaded) {
-      try {
+  // Helper function to register codecs with the client
+  const registerCodecs = (clientInstance: any, moduleInstance: any) => {
+    try {
+      // Try different registration methods based on client SDK version
+      if (typeof clientInstance.registerCodec === 'function') {
+        logger.info('Using registerCodec method to register codecs');
+        
+        // Try to register the attachment codec
+        if (moduleInstance.AttachmentCodec) {
+          try {
+            const attachmentCodec = new moduleInstance.AttachmentCodec();
+            clientInstance.registerCodec(attachmentCodec);
+            logger.info('Registered AttachmentCodec successfully');
+          } catch (error) {
+            logger.error('Failed to register AttachmentCodec:', error);
+          }
+        }
+        
+        // Try to register the remote attachment codec
+        if (moduleInstance.RemoteAttachmentCodec) {
+          try {
+            const remoteAttachmentCodec = new moduleInstance.RemoteAttachmentCodec();
+            clientInstance.registerCodec(remoteAttachmentCodec);
+            logger.info('Registered RemoteAttachmentCodec successfully');
+          } catch (error) {
+            logger.error('Failed to register RemoteAttachmentCodec:', error);
+          }
+        }
+      } 
+      // Check if the client has a contentTypeRegistry property
+      else if (clientInstance.contentTypeRegistry) {
+        logger.info('Using contentTypeRegistry to register codecs');
+        
         // Register the attachment codec
-        if (attachmentModule.AttachmentCodec) {
-          client.registerCodec(new attachmentModule.AttachmentCodec());
-          logger.info('Registered AttachmentCodec');
+        if (moduleInstance.ContentTypeAttachment && moduleInstance.AttachmentCodec) {
+          clientInstance.contentTypeRegistry.register({
+            contentType: 'xmtp.org/attachment:1.0',
+            contentFallback: 'Attachment',
+            encode: (content: any) => {
+              const codec = new moduleInstance.AttachmentCodec();
+              return codec.encode(content);
+            },
+            decode: (content: any) => {
+              const codec = new moduleInstance.AttachmentCodec();
+              return codec.decode(content);
+            }
+          });
+          logger.info('Registered attachment codec via contentTypeRegistry');
         }
         
         // Register the remote attachment codec
-        if (attachmentModule.RemoteAttachmentCodec) {
-          client.registerCodec(new attachmentModule.RemoteAttachmentCodec());
-          logger.info('Registered RemoteAttachmentCodec');
+        if (moduleInstance.ContentTypeRemoteAttachment && moduleInstance.RemoteAttachmentCodec) {
+          clientInstance.contentTypeRegistry.register({
+            contentType: 'xmtp.org/remote-attachment:1.0',
+            contentFallback: 'Remote Attachment',
+            encode: (content: any) => {
+              const codec = new moduleInstance.RemoteAttachmentCodec();
+              return codec.encode(content);
+            },
+            decode: (content: any) => {
+              const codec = new moduleInstance.RemoteAttachmentCodec();
+              return codec.decode(content);
+            }
+          });
+          logger.info('Registered remote attachment codec via contentTypeRegistry');
         }
-      } catch (error) {
-        logger.error('Failed to register codecs:', error);
       }
+      // Try direct property assignment as a last resort
+      else {
+        logger.warn('No standard method available to register codecs, trying direct registration');
+        
+        try {
+          // Try to register codecs directly on client instance (depends on SDK version)
+          if (clientInstance.codecs && Array.isArray(clientInstance.codecs)) {
+            if (moduleInstance.AttachmentCodec) {
+              clientInstance.codecs.push(new moduleInstance.AttachmentCodec());
+            }
+            if (moduleInstance.RemoteAttachmentCodec) {
+              clientInstance.codecs.push(new moduleInstance.RemoteAttachmentCodec());
+            }
+            logger.info('Added codecs directly to client.codecs array');
+          }
+          // Some versions might support an add method on the codecs property
+          else if (clientInstance.codecs && typeof clientInstance.codecs.add === 'function') {
+            if (moduleInstance.AttachmentCodec) {
+              clientInstance.codecs.add(new moduleInstance.AttachmentCodec());
+            }
+            if (moduleInstance.RemoteAttachmentCodec) {
+              clientInstance.codecs.add(new moduleInstance.RemoteAttachmentCodec());
+            }
+            logger.info('Added codecs using client.codecs.add method');
+          }
+          // Last resort - monkey patch the decode method to handle attachments
+          else {
+            // This is a very aggressive approach but might work as a last resort
+            logger.warn('Using aggressive patch to handle attachment content types');
+            
+            // Store original decodeContent method if it exists
+            const originalDecodeContent = clientInstance.decodeContent || 
+              (clientInstance.messaging && clientInstance.messaging.decodeContent);
+            
+            if (originalDecodeContent && typeof originalDecodeContent === 'function') {
+              // Create a bound version of the original function
+              const boundOriginalDecodeContent = originalDecodeContent.bind(clientInstance);
+              
+              // Override to handle attachment content types
+              const patchedDecodeContent = async (content: any, contentType?: any) => {
+                try {
+                  // Use the bound original method
+                  return await boundOriginalDecodeContent(content, contentType);
+                } catch (error) {
+                  logger.warn('Error in decodeContent, using fallback:', error);
+                  
+                  // Prevent infinite recursion
+                  if (patchedDecodeContent.isHandlingError) {
+                    logger.error('Recursive call to patchedDecodeContent detected, returning original content');
+                    return content;
+                  }
+                  
+                  // Check if this is a codec not found error for our content types
+                  if (error instanceof Error && 
+                     (error.message.includes('Codec not found') || 
+                      error.message.includes('codecFor') || 
+                      error.message.includes('undefined'))) {
+                    
+                    logger.warn('Intercepted codec error, using fallback decoders');
+                    
+                    // Set flag to prevent recursion
+                    patchedDecodeContent.isHandlingError = true;
+                    
+                    try {
+                      // Try to identify content type
+                      const contentTypeStr = content?.contentType?.toString() || 
+                                             contentType?.toString() || 
+                                             '';
+                      
+                      // Handle attachment content
+                      if (contentTypeStr.includes('attachment') && moduleInstance.AttachmentCodec) {
+                        logger.info('Using fallback attachment decoder for:', contentTypeStr);
+                        
+                        // Instead of using the codec directly, use a safer approach
+                        try {
+                          // Create a simple object with the content
+                          if (typeof content === 'object' && content !== null) {
+                            // Extract data without triggering codec
+                            return {
+                              filename: content.filename || 'attachment',
+                              mimeType: content.mimeType || 'application/octet-stream',
+                              data: content.data || new Uint8Array(),
+                            };
+                          }
+                          return content;
+                        } catch (innerError) {
+                          logger.error('Error in fallback decoder:', innerError);
+                          return content;
+                        }
+                      }
+                      
+                      // Handle remote attachment
+                      if (contentTypeStr.includes('remote-attachment') && moduleInstance.RemoteAttachmentCodec) {
+                        logger.info('Using fallback remote attachment decoder for:', contentTypeStr);
+                        
+                        // Instead of using the codec directly, use a safer approach
+                        try {
+                          // Create a simple object with the content
+                          if (typeof content === 'object' && content !== null) {
+                            // Extract data without triggering codec
+                            return {
+                              filename: content.filename || 'remote-attachment',
+                              mimeType: content.mimeType || 'application/octet-stream',
+                              url: content.url || '',
+                            };
+                          }
+                          return content;
+                        } catch (innerError) {
+                          logger.error('Error in fallback decoder:', innerError);
+                          return content;
+                        }
+                      }
+                    } finally {
+                      // Clear flag
+                      patchedDecodeContent.isHandlingError = false;
+                    }
+                  }
+                  throw error;
+                }
+              };
+              
+              // Add flag property to function
+              patchedDecodeContent.isHandlingError = false;
+              
+              // Apply the patched method
+              if (clientInstance.decodeContent) {
+                clientInstance.decodeContent = patchedDecodeContent;
+              } else if (clientInstance.messaging && clientInstance.messaging.decodeContent) {
+                clientInstance.messaging.decodeContent = patchedDecodeContent;
+              }
+            }
+          }
+          
+          logger.info('Attempted direct codec registration as fallback');
+        } catch (directError) {
+          logger.error('Failed to register codecs using direct methods:', directError);
+        }
+      }
+    } catch (error) {
+      logger.error('Failed to register codecs:', error);
     }
-  }, [client, attachmentModule.isLoaded]);
+  };
 
   // Load conversations when client is available
   const loadConversations = useCallback(async () => {
@@ -389,128 +583,144 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   // Connect to XMTP with a signer
   const connectXmtp = async (signer: any) => {
     logger.info('Connecting to XMTP...');
+    if (clientCreationInProgressRef.current) {
+      logger.warn('Client creation already in progress, ignoring duplicate request');
+      return;
+    }
+
+    if (!signer) {
+      setConnectionError(new Error('No signer provided'));
+      return;
+    }
+
+    clientCreationInProgressRef.current = true;
     setIsConnecting(true);
     setConnectionError(null);
-    
+
     try {
-      // Prevent multiple simultaneous connection attempts
-      if (clientCreationInProgressRef.current) {
-        logger.warn("XMTP client creation already in progress, skipping");
-        return;
+      logger.debug('Starting client creation with signer', { signer });
+      
+      // Generate a database encryption key if not already set
+      if (!encryptionKeyRef.current) {
+        encryptionKeyRef.current = crypto.getRandomValues(new Uint8Array(32));
+        logger.debug('Generated new database encryption key');
       }
       
-      clientCreationInProgressRef.current = true;
-      
-      // Check if we already have a client
-      if (client) {
-        logger.info("XMTP client already exists, using existing client");
-        setIsConnected(true);
-        setIsConnecting(false);
-        clientCreationInProgressRef.current = false;
-        return;
-      }
-      
-      // Get the address from the signer for logging
-      let address;
+      // Try to load the attachment module and prepare codecs before client creation
       try {
-        address = await signer.getAddress();
-        logger.info('Signer address:', address);
-      } catch (error) {
-        logger.error('Error getting address from signer:', error);
-        setIsConnecting(false);
-        clientCreationInProgressRef.current = false;
-        setConnectionError(new Error('Failed to get address from signer'));
-        throw new Error('Failed to get address from signer');
+        const { applyBufferPolyfill } = await import('../utils/bufferPolyfill');
+        applyBufferPolyfill();
+        logger.info('Buffer polyfill applied before client creation');
+      } catch (bufferError) {
+        logger.warn('Failed to apply Buffer polyfill:', bufferError);
       }
       
-      // Create a proper XMTP signer using our improved function
-      let xmtpSigner;
+      // Load attachment module before client creation
+      let attachmentCodecs: any[] = [];
       try {
-        logger.info('Creating XMTP signer...');
-        xmtpSigner = await createEthersSigner(address);
-        logger.info(`Created XMTP signer with wallet type: ${xmtpSigner.walletType}`);
-      } catch (error) {
-        logger.error('Error creating XMTP signer:', error);
-        setIsConnecting(false);
-        clientCreationInProgressRef.current = false;
-        setConnectionError(new Error('Failed to create XMTP signer'));
-        throw error;
+        logger.info('Pre-loading attachment module for client creation');
+        const module = await loadXmtpAttachmentModule();
+        if (module && module.AttachmentCodec && module.RemoteAttachmentCodec) {
+          // Create codec instances
+          const attachmentCodec = new module.AttachmentCodec();
+          const remoteAttachmentCodec = new module.RemoteAttachmentCodec();
+          
+          // Save them for direct inclusion in client options
+          attachmentCodecs = [attachmentCodec, remoteAttachmentCodec];
+          
+          // Also update the module state
+          setAttachmentModule({
+            ...module,
+            isLoaded: true
+          });
+          
+          logger.info('Prepared attachment codecs for client creation');
+        }
+      } catch (moduleError) {
+        logger.warn('Failed to pre-load attachment module:', moduleError);
       }
       
-      // Get encryption key for this user
-      logger.info('Getting encryption key...');
-      const encryptionKey = getOrCreateEncryptionKey(address);
-      logger.info('Using encryption key for database');
-      
-      // Verify the encryption key is valid
-      if (!encryptionKey || encryptionKey.length !== 32) {
-        const error = new Error('Invalid encryption key: must be exactly 32 bytes');
-        logger.error('Invalid encryption key length:', encryptionKey ? encryptionKey.length : 'null');
-        clientCreationInProgressRef.current = false;
-        setConnectionError(error);
-        throw error;
-      }
-      
-      // Create client options - use only dev environment as requested
-      const clientOptions = {
-        env: 'dev' as const
-      };
-      
-      logger.info('Attempting to create XMTP client with dev environment...');
-      logger.debug('Creating client with:', {
-        signerType: typeof xmtpSigner,
-        signerWalletType: xmtpSigner.walletType,
-        hasGetAddress: typeof xmtpSigner.getAddress === 'function',
-        hasSignMessage: typeof xmtpSigner.signMessage === 'function',
-        hasGetChainId: typeof xmtpSigner.getChainId === 'function',
-        hasGetBlockNumber: typeof (xmtpSigner as any).getBlockNumber === 'function',
-        options: clientOptions
-      });
+      // Create the client with correct parameter order: signer, encryptionKey, options
+      let clientInstance;
       
       try {
-        // Create the XMTP client with a timeout
-        logger.info('Starting client creation...');
-        const clientCreationPromise = Client.create(xmtpSigner as any, encryptionKey, clientOptions);
-        const timeoutPromise = new Promise<never>((_, reject) => {
-          setTimeout(() => {
-            logger.error('XMTP client creation timed out after 20 seconds');
-            reject(new Error('XMTP client creation timed out after 20 seconds'));
-          }, 20000); // 20 second timeout
-        });
-        
-        // Race the client creation promise against the timeout
-        logger.info('Waiting for client creation or timeout...');
-        const xmtpClient = await Promise.race([clientCreationPromise, timeoutPromise]);
+        // Create the client with correct parameter order: signer, encryptionKey, options
+        clientInstance = await Client.create(
+          signer, 
+          encryptionKeyRef.current as Uint8Array, 
+          {
+            env: 'dev', // Use development environment
+            codecs: attachmentCodecs // Pass codecs directly during creation
+          }
+        );
         
         logger.info('XMTP client created successfully');
-        setClient(xmtpClient);
-        setIsConnected(true);
-        
-        // Load conversations
-        logger.info('Loading conversations...');
-        await loadConversations();
-        logger.info('Conversations loaded successfully');
-      } catch (error: any) {
-        logger.error('Error creating XMTP client:', error);
-        logDetailedError(error, 'XMTP Client Creation');
-        
-        // Check for specific error types
-        if (error.message && error.message.includes('timeout')) {
-          logger.error('Client creation timed out. This could be due to network issues or wallet signature delays.');
-        } else if (error.message && error.message.includes('signature')) {
-          logger.error('Signature-related error. The user may have rejected the signature request or there might be wallet compatibility issues.');
-        }
-        
-        setConnectionError(error);
-        throw error;
+      } catch (createError) {
+        logger.error('Failed to create XMTP client:', createError);
+        throw createError;
       }
-    } catch (error) {
-      logger.error('Error in connectXmtp:', error);
-      setConnectionError(error as Error);
-      throw error;
-    } finally {
-      setIsConnecting(false);
+      
+      // Try to get the wallet address
+      let address = null;
+      try {
+        address = await signer.getAddress();
+        setWalletAddress(address);
+      } catch (addressError) {
+        logger.error('Could not get wallet address:', addressError);
+      }
+      
+      // Load and register attachment codecs immediately after client creation
+      try {
+        logger.info('Loading attachment codecs for immediate registration');
+        const module = await loadXmtpAttachmentModule();
+        
+        if (module && module.AttachmentCodec) {
+          // Attempt immediate registration
+          registerCodecs(clientInstance, module);
+          
+          // Also update the state for later use if needed
+          setAttachmentModule({
+            ...module,
+            isLoaded: true
+          });
+        } else {
+          logger.warn('Attachment module could not be loaded properly');
+        }
+      } catch (codecError) {
+        logger.error('Failed to register attachment codecs immediately:', codecError);
+        // Continue without the codecs for now
+      }
+      
+      // Set state with the new client
+      setClient(clientInstance);
+      setIsConnected(true);
+      
+      // Load existing conversations
+      try {
+        await loadConversations();
+      } catch (convError) {
+        logger.warn('Cannot load conversations:', convError);
+      }
+      
+      // Success
       clientCreationInProgressRef.current = false;
+      connectionAttemptedRef.current = true;
+      setIsConnecting(false);
+      logger.info('XMTP connection completed successfully');
+    } catch (error) {
+      // Connection failed
+      clientCreationInProgressRef.current = false;
+      connectionAttemptedRef.current = true;
+      setIsConnecting(false);
+      setIsConnected(false);
+      setClient(null);
+      
+      // Set and log the error
+      const formattedError = error instanceof Error ? error : new Error(String(error));
+      setConnectionError(formattedError);
+      logDetailedError(error, 'XMTP connection failed');
+      
+      throw formattedError;
     }
   };
 
