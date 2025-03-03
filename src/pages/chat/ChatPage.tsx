@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { CaretLeft } from '@phosphor-icons/react';
+import { CaretLeft, Gear } from '@phosphor-icons/react';
 // import { Gear } from '@phosphor-icons/react';
 import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
@@ -9,6 +9,30 @@ import PageHeader from '../../components/layout/PageHeader';
 import AudioMessage from '../../components/AudioMessage';
 // Import the attachment helper
 import { loadXmtpAttachmentModule } from '../../utils/xmtpAttachmentHelper';
+
+// Helper function for stable object stringification to create consistent hashes
+const stableStringify = (obj: any): string => {
+  if (!obj || typeof obj !== 'object') {
+    return String(obj);
+  }
+  
+  try {
+    const cache: any[] = [];
+    return JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'object' && value !== null) {
+        // Handle circular references
+        if (cache.includes(value)) {
+          return '[Circular]';
+        }
+        cache.push(value);
+      }
+      return value;
+    }, 2);
+  } catch (error) {
+    console.warn('Error in stableStringify:', error);
+    return `[Object-${Date.now()}]`;
+  }
+};
 
 // Simple date formatter function with improved error handling
 const formatMessageTime = (timestamp: any) => {
@@ -59,30 +83,60 @@ const formatMessageTime = (timestamp: any) => {
   }
 };
 
-// Helper function to determine if a message is from the bot
-const isBotMessage = (message: any, ourWalletAddress?: string): boolean => {
-  // Check if the message has explicit bot flag
-  if (message.isBot === true) {
-    return true;
+// Update the isBotMessage function with improved bot detection
+const isBotMessage = (message: any, recipientAddressOrInboxId?: string): boolean => {
+  try {
+    // Check if the message has explicit bot flag
+    if (message.isBot === true) {
+      return true;
+    }
+    
+    // If the message has a direction, use that
+    if (message.direction === 'received') {
+      return true;
+    }
+    
+    // If the message has a sender field, use that
+    if (message.sender === 'bot') {
+      return true;
+    }
+    
+    // If we have the sender address and recipient address, check if they're different
+    if (message.senderAddress && recipientAddressOrInboxId) {
+      // Safer comparison that handles string or null
+      const senderAddr = String(message.senderAddress).toLowerCase();
+      const recipientAddr = String(recipientAddressOrInboxId).toLowerCase();
+      return senderAddr !== recipientAddr;
+    }
+    
+    // Additional checks for inbox ID if available
+    if (message.senderInboxId && message.ourInboxId) {
+      return message.senderInboxId !== message.ourInboxId;
+    }
+    
+    // Check if this looks like an auto-response message (messages sent by bots often have this pattern)
+    // For text messages with typical AI response patterns
+    if (typeof message.content === 'string') {
+      const content = message.content.trim();
+      // Some heuristics for detecting bot responses
+      if (
+        // Starts with greeting patterns
+        content.match(/^(hi|hello|hey|greetings|howdy)/i) ||
+        // Contains typical bot disclaimer patterns
+        content.includes("I'm an AI") ||
+        content.includes("I am an AI") ||
+        content.includes("As an AI")
+      ) {
+        return true;
+      }
+    }
+    
+    // Default to false if we can't determine
+    return false;
+  } catch (error) {
+    console.warn('Error in isBotMessage:', error);
+    return false;
   }
-  
-  // If we have the sender address and our wallet address, compare them
-  if (message.senderAddress && ourWalletAddress) {
-    return message.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase();
-  }
-  
-  // If the message has a direction, use that
-  if (message.direction === 'received') {
-    return true;
-  }
-  
-  // If the message has a sender field, use that
-  if (message.sender === 'bot') {
-    return true;
-  }
-  
-  // Default to false if we can't determine
-  return false;
 };
 
 const ChatPage: React.FC = () => {
@@ -97,6 +151,8 @@ const ChatPage: React.FC = () => {
   const [reownSigner, setReownSigner] = useState<any>(null);
   const [connectionError, setConnectionError] = useState<Error | null>(null);
   const [messageStream, setMessageStream] = useState<any>(null);
+  const messageStreamRef = useRef<any>(null);
+  const messagePollingRef = useRef<any>(null);
   
   // Check if user is connected to Reown on mount
   useEffect(() => {
@@ -229,6 +285,84 @@ const ChatPage: React.FC = () => {
         
         if (!attachmentCodecPresent) {
           console.warn('Attachment codec not registered yet. Messages with attachments may fail to load.');
+          
+          // Emergency codec registration
+          console.log('Attempting emergency codec registration...');
+          try {
+            // Late import the attachment modules
+            const xmtpAttachmentHelper = await import('../../utils/xmtpAttachmentHelper');
+            const attachmentModule = await xmtpAttachmentHelper.loadXmtpAttachmentModule();
+            
+            if (attachmentModule && attachmentModule.AttachmentCodec && attachmentModule.RemoteAttachmentCodec) {
+              console.log('Attachment module loaded, registering codecs...');
+              
+              // Method 1: Try registering via contentTypeRegistry if available
+              if (client.contentTypeRegistry && typeof client.contentTypeRegistry.register === 'function') {
+                const AttachmentCodec = attachmentModule.AttachmentCodec;
+                const RemoteAttachmentCodec = attachmentModule.RemoteAttachmentCodec;
+                
+                try {
+                  client.contentTypeRegistry.register(new AttachmentCodec());
+                  client.contentTypeRegistry.register(new RemoteAttachmentCodec());
+                  console.log('Emergency codec registration successful via contentTypeRegistry');
+                } catch (regError) {
+                  console.warn('Failed to register codecs via contentTypeRegistry:', regError);
+                }
+              }
+              
+              // Method 2: Patch the codecFor method as a fallback
+              if (client.contentTypeRegistry && typeof client.contentTypeRegistry.codecFor === 'function') {
+                const originalCodecFor = client.contentTypeRegistry.codecFor;
+                let isHandlingCodecError = false;
+                
+                client.contentTypeRegistry.codecFor = function(contentType: any) {
+                  // Prevent infinite recursion
+                  if (isHandlingCodecError) {
+                    return null;
+                  }
+                  
+                  try {
+                    const codec = originalCodecFor.call(this, contentType);
+                    if (codec) return codec;
+                    
+                    // Only handle specific content types if codec is not found
+                    const contentTypeStr = contentType.toString();
+                    if (contentTypeStr === 'xmtp.org/attachment:1.0') {
+                      console.log('Providing fallback AttachmentCodec');
+                      return new attachmentModule.AttachmentCodec();
+                    } else if (contentTypeStr === 'xmtp.org/remote-attachment:1.0') {
+                      console.log('Providing fallback RemoteAttachmentCodec');
+                      return new attachmentModule.RemoteAttachmentCodec();
+                    }
+                    return null;
+                  } catch (error) {
+                    console.warn('Error in patched codecFor:', error);
+                    
+                    // Handle errors with fallback
+                    isHandlingCodecError = true;
+                    try {
+                      const contentTypeStr = contentType.toString();
+                      if (contentTypeStr === 'xmtp.org/attachment:1.0') {
+                        console.log('Providing fallback AttachmentCodec after error');
+                        return new attachmentModule.AttachmentCodec();
+                      } else if (contentTypeStr === 'xmtp.org/remote-attachment:1.0') {
+                        console.log('Providing fallback RemoteAttachmentCodec after error');
+                        return new attachmentModule.RemoteAttachmentCodec();
+                      }
+                    } finally {
+                      isHandlingCodecError = false;
+                    }
+                    return null;
+                  }
+                };
+                console.log('Patched codecFor method to handle attachment content types');
+              }
+              
+              console.log('Retrying to load messages after emergency codec registration');
+            }
+          } catch (emergencyError) {
+            console.error('Failed emergency codec registration:', emergencyError);
+          }
         }
       } catch (error) {
         console.warn('Error checking for attachment codec:', error);
@@ -239,18 +373,79 @@ const ChatPage: React.FC = () => {
       console.log('Got conversation with Scarlett bot:', conversation);
       
       // Try to get the bot's inbox ID from the conversation if available
-      let botInboxId = null;
+      let botInboxId: string | null = null;
+      let ourWalletAddress: string | null = null;
       try {
-        // These are guesses at property names - may need adjustment based on actual SDK
+        // Get our wallet address first
+        if (xmtp && xmtp.client) {
+          const xmtpClient = xmtp.client as any;
+          if (xmtpClient.address) {
+            ourWalletAddress = xmtpClient.address;
+            console.log('Our wallet address:', ourWalletAddress);
+          }
+          
+          if (xmtpClient.inboxId) {
+            console.log('Our inbox ID:', xmtpClient.inboxId);
+          }
+        }
+        
+        // Then get bot details from conversation
         if (conversation.peerInboxId) {
           botInboxId = conversation.peerInboxId;
           console.log('Bot inbox ID:', botInboxId);
-        } else if (conversation.topic && conversation.topic.includes('inbox')) {
-          // Some implementations might encode the inbox ID in the topic
-          console.log('Conversation topic:', conversation.topic);
+        } else if (conversation.peerAddress) {
+          // Use peerAddress as fallback for botInboxId
+          botInboxId = conversation.peerAddress;
+          console.log('Using bot peer address as ID:', botInboxId);
+        }
+        
+        // Hard-coded bot addresses if needed
+        // Add known bot addresses here as a last resort
+        const KNOWN_BOT_ADDRESSES = [
+          // Add the bot inbox ID we see in the logs
+          '67e948e03dfd2842b5302872f49734e338a21b0db60816ab56bd16fad40dfe16'
+        ];
+        
+        // Log all details for debugging
+        console.log('Conversation details for bot identification:', {
+          id: conversation.id,
+          topic: conversation.topic,
+          peerAddress: conversation.peerAddress,
+          peerInboxId: conversation.peerInboxId,
+          recipientAddress: conversation.recipientAddress,
+          ourWalletAddress: ourWalletAddress,
+          botInboxId: botInboxId,
+          knownBotAddresses: KNOWN_BOT_ADDRESSES
+        });
+        
+        // Enhanced fallback mechanism
+        if (!botInboxId && KNOWN_BOT_ADDRESSES.length > 0) {
+          console.warn('Using known bot address from hard-coded list');
+          botInboxId = KNOWN_BOT_ADDRESSES[0];
+        }
+        
+        // Use topic as a last resort if it contains information
+        if (!botInboxId && conversation.topic) {
+          const parts = conversation.topic.split('/');
+          // In some XMTP implementations, the topic might contain the peer address
+          if (parts.length > 1) {
+            const potentialAddresses = parts.filter((part: string) => 
+              part.length > 30 && /^[0-9a-fA-F]+$/.test(part));
+            
+            if (potentialAddresses.length > 0) {
+              // Find the address that's not our address
+              const otherAddress = potentialAddresses.find((addr: string) => 
+                !ourWalletAddress || addr.toLowerCase() !== ourWalletAddress.toLowerCase());
+              
+              if (otherAddress) {
+                botInboxId = otherAddress;
+                console.log('Extracted potential bot address from topic:', botInboxId);
+              }
+            }
+          }
         }
       } catch (error) {
-        console.log('Could not get bot inbox ID:', error);
+        console.warn('Error getting bot inbox ID:', error);
       }
       
       setBotConversation(conversation);
@@ -331,75 +526,134 @@ const ChatPage: React.FC = () => {
           }
         }
         
-        // Create a local array to accumulate formatted messages
+        // Process the messages to create UI-friendly format
         const processedMessages: any[] = [];
+        // Create a map to track seen messages by content hash
+        const seenMessageHashes = new Map<string, boolean>();
         
-        // Process messages one by one to await content promises
         for (const msg of messages) {
           try {
-            // Log basic message info for debugging (without content that might be a Promise)
             console.log('Processing message:', {
               id: msg.id,
               senderAddress: msg.senderAddress,
-              recipientAddress: msg.recipientAddress,
-              sent: msg.sent,
-              messageVersion: msg.messageVersion,
-              contentTopic: msg.contentTopic,
-              direction: msg.direction,
-              // Add any XMTP v3 specific fields we can find
-              senderInboxId: msg.senderInboxId,
-              recipientInboxId: msg.recipientInboxId
+              timestamp: msg.sent,
+              hasContent: !!msg.content
             });
             
-            // Enhance the message with our inbox ID if available
-            if (ourInboxId) {
-              msg.ourInboxId = ourInboxId;
-            }
+            // Determine if from bot using enhanced logic
+            const isFromBot = (
+              // First check explicit flags
+              msg.isBot === true || 
+              msg.direction === 'received' || 
+              msg.sender === 'bot' || 
+              // Then check if the message is NOT from our address (if we have both addresses)
+              (ourWalletAddress && msg.senderAddress && 
+               msg.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase()) ||
+              // Check against botInboxId if available
+              (botInboxId && msg.senderAddress && 
+               (msg.senderAddress.toLowerCase() === botInboxId.toLowerCase())) ||
+              // Check sender inbox ID against botInboxId
+              (botInboxId && msg.senderInboxId && msg.senderInboxId === botInboxId) ||
+              // Use the enhanced isBotMessage helper with proper params
+              isBotMessage(msg, ourWalletAddress || undefined)
+            );
             
-            // For XMTP v3, determine if this is a message we sent or received
-            // If we don't have direction information, try to infer it
-            if (!msg.direction) {
-              // In XMTP v3, we can sometimes determine direction by comparing inbox IDs
-              if (msg.senderInboxId && ourInboxId) {
-                msg.direction = msg.senderInboxId === ourInboxId ? 'sent' : 'received';
-                console.log(`Inferred message direction: ${msg.direction} based on inbox ID comparison`);
-              }
-            }
-            
-            // Use the helper function to determine if message is from bot
-            const isFromBot = isBotMessage(msg, botInboxId);
-            
-            // Handle content which might be a Promise
-            let resolvedContent;
-            try {
-              // Check if content is a Promise and await it
-              if (msg.content && typeof msg.content.then === 'function') {
-                console.log('Message content is a Promise, resolving...');
-                resolvedContent = await msg.content;
-                console.log('Resolved content:', resolvedContent);
-              } else {
-                resolvedContent = msg.content;
-              }
-            } catch (contentError) {
-              console.error('Error resolving message content:', contentError);
-              resolvedContent = 'Error: Could not load message content';
-            }
-            
-            // Add the formatted message to our array
-            processedMessages.push({
+            // Add detailed logging for message direction determination
+            console.log('Enhanced message direction determination:', {
               id: msg.id,
+              senderInboxId: msg.senderInboxId,
+              senderAddress: msg.senderAddress,
+              botInboxId: botInboxId,
+              ourWalletAddress: ourWalletAddress,
+              explicitFlags: {
+                isBot: msg.isBot === true,
+                direction: msg.direction === 'received',
+                sender: msg.sender === 'bot'
+              },
+              addressCheck: (ourWalletAddress && msg.senderAddress && 
+                             msg.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase()),
+              botInboxCheck: (botInboxId && msg.senderAddress && 
+                             (msg.senderAddress.toLowerCase() === botInboxId.toLowerCase())),
+              senderInboxCheck: (botInboxId && msg.senderInboxId && msg.senderInboxId === botInboxId),
+              fallbackCheck: (msg.senderInboxId && ourWalletAddress && msg.senderInboxId !== ourWalletAddress),
+              finalDecision: isFromBot
+            });
+            
+            // Handle content that might be a Promise
+            let resolvedContent = msg.content;
+            
+            // Await Promise content
+            if (resolvedContent instanceof Promise) {
+              try {
+                console.log(`Message ${msg.id} content is a Promise, resolving...`);
+                resolvedContent = await resolvedContent;
+                console.log(`Message ${msg.id} content resolved:`, resolvedContent);
+              } catch (contentError) {
+                console.error('Error resolving message content:', contentError);
+                resolvedContent = 'Error: Could not load message content';
+              }
+            }
+            
+            // Generate a content hash to detect duplicate messages
+            let contentHash = '';
+            try {
+              // If we have attachment format, create hash based on filename, mimeType and contentSize
+              if (
+                typeof resolvedContent === 'object' && 
+                resolvedContent?.type?.authorityId === 'xmtp.org' && 
+                resolvedContent?.type?.typeId === 'attachment' &&
+                resolvedContent?.parameters
+              ) {
+                const { filename, mimeType, contentSize } = resolvedContent.parameters;
+                contentHash = `${filename}:${mimeType}:${contentSize}:${isFromBot}`;
+              } else if (typeof resolvedContent === 'string') {
+                // For text messages, use the content directly
+                contentHash = `${resolvedContent}:${isFromBot}`;
+              } else if (resolvedContent && typeof resolvedContent === 'object') {
+                // For other objects, use a JSON representation
+                // Use a more stable approach to stringify objects
+                const stableJsonString = stableStringify(resolvedContent);
+                contentHash = `${stableJsonString}:${isFromBot}`;
+              }
+              
+              // Skip duplicate messages with the same content
+              if (contentHash && seenMessageHashes.has(contentHash)) {
+                console.log(`Skipping duplicate message with content hash: ${contentHash}`);
+                continue;
+              }
+              
+              // Mark this content hash as seen
+              if (contentHash) {
+                seenMessageHashes.set(contentHash, true);
+              }
+            } catch (hashError) {
+              console.warn('Error generating content hash:', hashError);
+              // Continue processing even if hash generation fails
+            }
+            
+            // Add the formatted message to our array with a truly unique ID that always includes randomness
+            const uniqueTimestamp = Date.now();
+            const randomSuffix = Math.random().toString(36).substring(2, 10);
+            processedMessages.push({
+              id: `${uniqueTimestamp}-${randomSuffix}-${msg.id}${contentHash ? `-${contentHash}` : ''}`,
               content: resolvedContent,
               sender: isFromBot ? 'bot' : 'user',
-              timestamp: msg.sent || new Date()
+              timestamp: msg.sent || new Date(),
+              isBot: isFromBot,
+              direction: isFromBot ? 'received' : 'sent'
             });
           } catch (formatError) {
             console.error('Error formatting message:', formatError, msg);
-            // Add a placeholder for messages we can't format
+            // Add a placeholder for messages we can't format with a unique ID
+            const uniqueTimestamp = Date.now();
+            const randomSuffix = Math.random().toString(36).substring(2, 10);
             processedMessages.push({
-              id: msg.id || Date.now().toString(),
+              id: `${uniqueTimestamp}-${randomSuffix}-error-${msg.id || 'unknown'}`,
               content: 'Error displaying message',
               sender: 'user', // Default to user if we can't determine
-              timestamp: new Date()
+              timestamp: new Date(),
+              isBot: false,
+              direction: 'sent'
             });
           }
         }
@@ -407,6 +661,250 @@ const ChatPage: React.FC = () => {
         // Show all messages
         setChatMessages(processedMessages);
         setSendStatus(null);
+        
+        // Set up polling for new messages
+        if (messagePollingRef.current) {
+          clearInterval(messagePollingRef.current);
+          messagePollingRef.current = null;
+        }
+        
+        // Set up polling for new messages
+        const pollInterval = 3000; // 3 seconds
+        console.log(`Setting up polling for new messages every ${pollInterval}ms`);
+        
+        const polling = setInterval(async () => {
+          try {
+            if (conversation) {
+              // Get the latest messages
+              const latestMessages = await conversation.messages();
+              
+              // Get current message IDs and content hashes for comparison
+              const currentMessageIds = new Set(chatMessages.map((msg: any) => msg.id));
+              // Also track content hashes to avoid duplicates with same content but different IDs
+              const currentContentHashes = new Map<string, boolean>();
+              
+              // Process each message in the current chat to extract content hashes
+              chatMessages.forEach((msg: any) => {
+                try {
+                  // Extract content hash from message ID if it exists (from our new format id: `${msg.id}-${contentHash}`)
+                  const parts = msg.id.split('-');
+                  if (parts.length > 1) {
+                    // Assume the first part is the original ID and the rest is our content hash
+                    const contentHashPart = parts.slice(1).join('-');
+                    if (contentHashPart) {
+                      currentContentHashes.set(contentHashPart, true);
+                    }
+                  }
+                  
+                  // Also try to generate a content hash from the message content
+                  let contentHash = '';
+                  const content = msg.content;
+                  
+                  if (
+                    typeof content === 'object' && 
+                    content?.type?.authorityId === 'xmtp.org' && 
+                    content?.type?.typeId === 'attachment' &&
+                    content?.parameters
+                  ) {
+                    const { filename, mimeType, contentSize } = content.parameters;
+                    contentHash = `${filename}:${mimeType}:${contentSize}:${msg.isBot}`;
+                  } else if (typeof content === 'string') {
+                    contentHash = `${content}:${msg.isBot}`;
+                  } else if (content && typeof content === 'object') {
+                    contentHash = `${JSON.stringify(content)}:${msg.isBot}`;
+                  }
+                  
+                  if (contentHash) {
+                    currentContentHashes.set(contentHash, true);
+                  }
+                } catch (hashError) {
+                  console.warn('Error processing existing message for hash:', hashError);
+                }
+              });
+              
+              // Find messages that we don't already have
+              const newMessages = latestMessages.filter((msg: any) => !currentMessageIds.has(msg.id));
+              
+              if (newMessages.length > 0) {
+                console.log(`Found ${newMessages.length} new messages during polling`);
+                
+                // Update our reference to all messages
+                messages = latestMessages;
+                
+                // Process each new message
+                for (const newMsg of newMessages) {
+                  try {
+                    console.log('Processing new message from polling:', {
+                      id: newMsg.id, 
+                      senderAddress: newMsg.senderAddress,
+                      senderInboxId: newMsg.senderInboxId
+                    });
+                    
+                    // Improved bot message detection with explicit debugging log
+                    const isFromBot = (
+                      // Check for explicit bot flags
+                      newMsg.isBot === true || 
+                      newMsg.direction === 'received' || 
+                      newMsg.sender === 'bot' || 
+                      // Check if the message is NOT from our address (if we have both addresses)
+                      (ourWalletAddress && newMsg.senderAddress && 
+                       newMsg.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase()) ||
+                      // Check against botInboxId if available
+                      (botInboxId && newMsg.senderAddress && 
+                       (newMsg.senderAddress.toLowerCase() === botInboxId.toLowerCase())) ||
+                      // Check sender inbox ID against botInboxId
+                      (botInboxId && newMsg.senderInboxId && newMsg.senderInboxId === botInboxId) ||
+                      // Use the isBotMessage helper as fallback with additional detection
+                      isBotMessage(newMsg, ourWalletAddress || undefined)
+                    );
+                    
+                    // Add detailed logging for debugging
+                    console.log('Enhanced polling message direction determination:', {
+                      id: newMsg.id,
+                      senderInboxId: newMsg.senderInboxId,
+                      senderAddress: newMsg.senderAddress,
+                      botInboxId: botInboxId,
+                      ourWalletAddress: ourWalletAddress,
+                      explicitFlags: {
+                        isBot: newMsg.isBot === true,
+                        direction: newMsg.direction === 'received',
+                        sender: newMsg.sender === 'bot'
+                      },
+                      addressCheck: (ourWalletAddress && newMsg.senderAddress && 
+                                    newMsg.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase()),
+                      botInboxCheck: (botInboxId && newMsg.senderAddress && 
+                                    (newMsg.senderAddress.toLowerCase() === botInboxId.toLowerCase())),
+                      senderInboxCheck: (botInboxId && newMsg.senderInboxId && newMsg.senderInboxId === botInboxId),
+                      isBotMessageHelperResult: isBotMessage(newMsg, ourWalletAddress || undefined),
+                      finalDecision: isFromBot
+                    });
+                    
+                    // Handle content that might be a Promise
+                    let resolvedContent = newMsg.content;
+                    
+                    if (resolvedContent instanceof Promise) {
+                      try {
+                        console.log(`New message ${newMsg.id} content is a Promise, resolving...`);
+                        resolvedContent = await resolvedContent;
+                        console.log(`New message ${newMsg.id} content resolved:`, resolvedContent);
+                      } catch (contentError) {
+                        console.error('Error resolving new message content:', contentError);
+                        resolvedContent = 'Error: Could not load message content';
+                      }
+                    }
+                    
+                    // Generate a content hash to detect duplicate messages
+                    let contentHash = '';
+                    try {
+                      // If we have attachment format, create hash based on filename, mimeType and contentSize
+                      if (
+                        typeof resolvedContent === 'object' && 
+                        resolvedContent?.type?.authorityId === 'xmtp.org' && 
+                        resolvedContent?.type?.typeId === 'attachment' &&
+                        resolvedContent?.parameters
+                      ) {
+                        const { filename, mimeType, contentSize } = resolvedContent.parameters;
+                        contentHash = `${filename}:${mimeType}:${contentSize}:${isFromBot}`;
+                      } else if (typeof resolvedContent === 'string') {
+                        // For text messages, use the content directly
+                        contentHash = `${resolvedContent}:${isFromBot}`;
+                      } else if (resolvedContent && typeof resolvedContent === 'object') {
+                        // For other objects, use a JSON representation
+                        // Use a more stable approach to stringify objects
+                        const stableJsonString = stableStringify(resolvedContent);
+                        contentHash = `${stableJsonString}:${isFromBot}`;
+                      }
+                      
+                      // Skip duplicate messages with the same content
+                      if (contentHash && currentContentHashes.has(contentHash)) {
+                        console.log(`Skipping duplicate new message with content hash: ${contentHash}`);
+                        continue;
+                      }
+                    } catch (hashError) {
+                      console.warn('Error generating content hash for new message:', hashError);
+                      // Continue processing even if hash generation fails
+                    }
+                    
+                    // Create the formatted message with unique ID
+                    const uniqueTimestamp = Date.now();
+                    const randomSuffix = Math.random().toString(36).substring(2, 10);
+                    const formattedMessage = {
+                      id: `${uniqueTimestamp}-${randomSuffix}-${newMsg.id}${contentHash ? `-${contentHash}` : ''}`,
+                      content: resolvedContent,
+                      sender: isFromBot ? 'bot' : 'user',
+                      timestamp: newMsg.sent || new Date(),
+                      isBot: isFromBot,
+                      direction: isFromBot ? 'received' : 'sent'
+                    };
+                    
+                    console.log('Adding new message to UI:', {
+                      id: formattedMessage.id,
+                      isBot: formattedMessage.isBot,
+                      direction: formattedMessage.direction
+                    });
+                    
+                    // Add to the UI
+                    setChatMessages(prev => {
+                      // Check for duplicates using message content hash or direct comparison
+                      const msgIsDuplicate = prev.some(existingMsg => {
+                        // Extract content hash from ID if it exists
+                        const parts = existingMsg.id.split('-');
+                        // With our new format, content hash would be after the original message ID
+                        // Format is now: timestamp-randomSuffix-msgId-contentHash
+                        if (parts.length > 3 && contentHash) {
+                          // Get all parts after the message ID as potential content hash
+                          const existingContentHash = parts.slice(3).join('-');
+                          if (existingContentHash === contentHash) {
+                            console.log('Duplicate message detected in polling by content hash, skipping');
+                            return true;
+                          }
+                        }
+                        
+                        // Also check the original message ID (third part of our format)
+                        if (parts.length > 2 && parts[2] === newMsg.id) {
+                          console.log('Duplicate message detected in polling by ID, skipping');
+                          return true;
+                        }
+                        
+                        // Also compare raw content as fallback
+                        try {
+                          const existingContent = existingMsg.content;
+                          if (
+                            typeof existingContent === 'object' && 
+                            typeof resolvedContent === 'object' &&
+                            JSON.stringify(existingContent) === JSON.stringify(resolvedContent)
+                          ) {
+                            console.log('Duplicate message detected by content comparison, skipping');
+                            return true;
+                          }
+                        } catch (compareError) {
+                          console.warn('Error comparing message contents:', compareError);
+                        }
+                        
+                        return false;
+                      });
+                      
+                      if (msgIsDuplicate) {
+                        console.log('Skipping duplicate message in polling');
+                        return prev; // Don't add duplicate
+                      }
+                      
+                      // If we get here, it's not a duplicate, so add it
+                      return [...prev, formattedMessage];
+                    });
+                  } catch (newMsgError) {
+                    console.error('Error processing new message:', newMsgError);
+                  }
+                }
+              }
+            }
+          } catch (pollError) {
+            console.error('Error polling for new messages:', pollError);
+          }
+        }, pollInterval);
+        
+        // Store polling reference for cleanup
+        messagePollingRef.current = polling;
       } catch (messagesError) {
         console.error('Error loading messages:', messagesError);
         setChatMessages([]);
@@ -424,10 +922,46 @@ const ChatPage: React.FC = () => {
             console.log('New message received:', msg);
             
             try {
-              // Determine if message is from bot
-              const isFromBot = isBotMessage(msg, botInboxId);
+              // Determine if message is from bot using enhanced detection logic
+              const isFromBot = (
+                // First check explicit flags
+                msg.isBot === true || 
+                msg.direction === 'received' || 
+                msg.sender === 'bot' || 
+                // Then check if the message is NOT from our address (if we have both addresses)
+                (ourWalletAddress && msg.senderAddress && 
+                 msg.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase()) ||
+                // Check against botInboxId if available
+                (botInboxId && msg.senderAddress && 
+                 (msg.senderAddress.toLowerCase() === botInboxId.toLowerCase())) ||
+                // Check sender inbox ID against botInboxId
+                (botInboxId && msg.senderInboxId && msg.senderInboxId === botInboxId) ||
+                // Use the enhanced isBotMessage helper with proper params
+                isBotMessage(msg, ourWalletAddress || undefined)
+              );
               
-              // Handle content which might be a Promise
+              // Add detailed logging for stream handler
+              console.log('Enhanced stream message direction determination:', {
+                id: msg.id,
+                senderInboxId: msg.senderInboxId,
+                senderAddress: msg.senderAddress,
+                botInboxId: botInboxId,
+                ourWalletAddress: ourWalletAddress,
+                explicitFlags: {
+                  isBot: msg.isBot === true,
+                  direction: msg.direction === 'received',
+                  sender: msg.sender === 'bot'
+                },
+                addressCheck: (ourWalletAddress && msg.senderAddress && 
+                              msg.senderAddress.toLowerCase() !== ourWalletAddress.toLowerCase()),
+                botInboxCheck: (botInboxId && msg.senderAddress && 
+                              (msg.senderAddress.toLowerCase() === botInboxId.toLowerCase())),
+                senderInboxCheck: (botInboxId && msg.senderInboxId && msg.senderInboxId === botInboxId),
+                isBotMessageHelperResult: isBotMessage(msg, ourWalletAddress || undefined),
+                finalDecision: isFromBot
+              });
+              
+              // Handle content that might be a Promise
               let resolvedContent;
               try {
                 // Check if content is a Promise and await it
@@ -443,18 +977,129 @@ const ChatPage: React.FC = () => {
                 resolvedContent = 'Error: Could not load message content';
               }
               
-              // Format the message
-              const formattedMessage = {
-                id: msg.id,
-                content: resolvedContent,
-                sender: isFromBot ? 'bot' : 'user',
-                timestamp: msg.sent || new Date()
-              };
+              // Check if this is a duplicate message by comparing with existing messages
+              let isDuplicate = false;
               
-              // Add to chat messages
-              setChatMessages(prev => [...prev, formattedMessage]);
+              // Generate a content hash for deduplication
+              let contentHash = '';
+              try {
+                // If we have attachment format, create hash based on filename, mimeType and contentSize
+                if (
+                  typeof resolvedContent === 'object' && 
+                  resolvedContent?.type?.authorityId === 'xmtp.org' && 
+                  resolvedContent?.type?.typeId === 'attachment' &&
+                  resolvedContent?.parameters
+                ) {
+                  const { filename, mimeType, contentSize } = resolvedContent.parameters;
+                  contentHash = `${filename}:${mimeType}:${contentSize}:${isFromBot}`;
+                } else if (typeof resolvedContent === 'string') {
+                  // For text messages, use the content directly
+                  contentHash = `${resolvedContent}:${isFromBot}`;
+                } else if (resolvedContent && typeof resolvedContent === 'object') {
+                  // For other objects, use a JSON representation
+                  // Use a more stable approach to stringify objects
+                  const stableJsonString = stableStringify(resolvedContent);
+                  contentHash = `${stableJsonString}:${isFromBot}`;
+                }
+                
+                // Check for duplicates by comparing with existing messages in the chat
+                setChatMessages(prev => {
+                  // Check for duplicates using message content hash or direct comparison
+                  const msgIsDuplicate = prev.some(existingMsg => {
+                    // Extract content hash from ID if it exists
+                    const parts = existingMsg.id.split('-');
+                    // With our new format, content hash would be after the original message ID
+                    // Format is now: timestamp-randomSuffix-msgId-contentHash
+                    if (parts.length > 3 && contentHash) {
+                      // Get all parts after the message ID as potential content hash
+                      const existingContentHash = parts.slice(3).join('-');
+                      if (existingContentHash === contentHash) {
+                        console.log('Duplicate message detected in stream by content hash, skipping');
+                        return true;
+                      }
+                    }
+                    
+                    // Also compare raw content as fallback
+                    try {
+                      const existingContent = existingMsg.content;
+                      if (
+                        typeof existingContent === 'object' && 
+                        typeof resolvedContent === 'object' &&
+                        JSON.stringify(existingContent) === JSON.stringify(resolvedContent)
+                      ) {
+                        console.log('Duplicate message detected by content comparison, skipping');
+                        return true;
+                      }
+                    } catch (compareError) {
+                      console.warn('Error comparing message contents:', compareError);
+                    }
+                    
+                    return false;
+                  });
+                  
+                  // Set our outer isDuplicate flag for later use
+                  isDuplicate = msgIsDuplicate;
+                  
+                  // If not a duplicate, add the message
+                  if (!msgIsDuplicate) {
+                    // Format the message with a unique ID
+                    const uniqueTimestamp = Date.now();
+                    const randomSuffix = Math.random().toString(36).substring(2, 10);
+                    const formattedMessage = {
+                      id: `${uniqueTimestamp}-${randomSuffix}-${msg.id}${contentHash ? `-${contentHash}` : ''}`,
+                      content: resolvedContent,
+                      sender: isFromBot ? 'bot' : 'user',
+                      timestamp: msg.sent || new Date(),
+                      isBot: isFromBot,
+                      direction: isFromBot ? 'received' : 'sent'
+                    };
+                    
+                    console.log('Adding streamed message to chat:', {
+                      id: formattedMessage.id,
+                      isBot: formattedMessage.isBot
+                    });
+                    
+                    // Return updated messages array
+                    return [...prev, formattedMessage];
+                  }
+                  
+                  return prev; // Return unchanged if duplicate
+                });
+              } catch (hashError) {
+                console.warn('Error generating content hash for streamed message:', hashError);
+                // If we can't generate a hash, fall back to simple ID-based duplicate check
+                const msgId = msg.id || '';
+                
+                // Only add the message if it's not a duplicate by ID
+                setChatMessages(prev => {
+                  if (prev.some(existingMsg => {
+                    const parts = existingMsg.id.split('-');
+                    if (parts.length > 2) {
+                      return parts[2] === msgId; // Compare with the third part of our ID format
+                    }
+                    return false;
+                  })) {
+                    console.log('Duplicate message detected by ID, skipping');
+                    return prev; // Don't add duplicate
+                  }
+                  
+                  // Format the message with a unique fallback ID
+                  const uniqueTimestamp = Date.now();
+                  const randomSuffix = Math.random().toString(36).substring(2, 10);
+                  const formattedMessage = {
+                    id: `${uniqueTimestamp}-${randomSuffix}-${msgId || 'stream'}`,
+                    content: resolvedContent,
+                    sender: isFromBot ? 'bot' : 'user',
+                    timestamp: msg.sent || new Date(),
+                    isBot: isFromBot,
+                    direction: isFromBot ? 'received' : 'sent'
+                  };
+                  
+                  return [...prev, formattedMessage];
+                });
+              }
             } catch (error) {
-              console.error('Error processing new message:', error);
+              console.error('Error processing streamed message:', error);
             }
           };
           
@@ -892,7 +1537,7 @@ const ChatPage: React.FC = () => {
         // Last resort: stringify the object safely, avoiding circular references
         try {
           const cache: any[] = [];
-          const safeStringify = (obj: any): string => {
+          const stableStringify = (obj: any): string => {
             return JSON.stringify(obj, (key, value) => {
               if (typeof value === 'object' && value !== null) {
                 if (cache.includes(value)) return '[Circular]';
@@ -902,7 +1547,7 @@ const ChatPage: React.FC = () => {
             }, 2);
           };
           
-          const stringified = safeStringify(content);
+          const stringified = stableStringify(content);
           if (stringified === '{}') {
             return <p className="text-sm text-gray-400">[Empty object]</p>;
           }
@@ -940,6 +1585,18 @@ const ChatPage: React.FC = () => {
       }
     };
   }, [messageStream]);
+  
+  // Clean up on unmount or when dependencies change
+  useEffect(() => {
+    return () => {
+      // Clear polling interval if exists
+      if (messagePollingRef.current) {
+        console.log('Cleaning up message polling interval');
+        clearInterval(messagePollingRef.current);
+        messagePollingRef.current = null;
+      }
+    };
+  }, []);
   
   if (!xmtp?.isConnected) {
     return (
