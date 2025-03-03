@@ -10,24 +10,53 @@ import AudioMessage from '../../components/AudioMessage';
 // Import the attachment helper
 import { loadXmtpAttachmentModule } from '../../utils/xmtpAttachmentHelper';
 
-// Simple date formatter function to prevent Invalid Date issues
-const formatMessageTime = (timestamp: Date) => {
-  if (!timestamp || isNaN(timestamp.getTime())) {
+// Simple date formatter function with improved error handling
+const formatMessageTime = (timestamp: any) => {
+  try {
+    // If timestamp is null, undefined, or not a valid date object
+    if (!timestamp) {
+      return 'Unknown time';
+    }
+    
+    // If timestamp is a string (ISO format) or number (timestamp), convert to Date object
+    let date: Date;
+    if (typeof timestamp === 'string') {
+      date = new Date(timestamp);
+    } else if (typeof timestamp === 'number') {
+      date = new Date(timestamp);
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else {
+      return 'Invalid time format';
+    }
+    
+    // Check if the Date is valid
+    if (isNaN(date.getTime())) {
+      return 'Unknown time';
+    }
+    
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} min ago`;
+    if (diffMins < 1440) {
+      const hours = Math.floor(diffMins / 60);
+      return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
+    }
+    
+    // For messages older than a day, show the date
+    return date.toLocaleString('en-US', { 
+      month: 'short', 
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit'
+    });
+  } catch (error) {
+    console.error('Error formatting timestamp:', error, timestamp);
     return 'Unknown time';
   }
-  
-  const now = new Date();
-  const diffMs = now.getTime() - timestamp.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-  
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins} min ago`;
-  if (diffMins < 1440) {
-    const hours = Math.floor(diffMins / 60);
-    return `${hours} ${hours === 1 ? 'hour' : 'hours'} ago`;
-  }
-  
-  return timestamp.toLocaleDateString();
 };
 
 // Helper function to determine if a message is from the bot
@@ -689,16 +718,46 @@ const ChatPage: React.FC = () => {
   // Add a function to check if a message is an audio attachment
   const isAudioAttachment = (content: any): boolean => {
     try {
-      if (typeof content === 'string') {
-        const parsedContent = JSON.parse(content);
-        return (
-          parsedContent &&
-          parsedContent.mimeType &&
-          parsedContent.mimeType.startsWith('audio/')
-        );
+      // For XMTP attachment format with specific structure
+      if (content && content.type && 
+          (content.type.authorityId === 'xmtp.org' && 
+           content.type.typeId === 'attachment')) {
+        // Check if the attachment is audio based on mimeType in parameters
+        if (content.parameters && content.parameters.mimeType && 
+            content.parameters.mimeType.startsWith('audio/')) {
+          return true;
+        }
+        
+        // Check filename for audio extensions as fallback
+        if (content.parameters && content.parameters.filename) {
+          const filename = content.parameters.filename.toLowerCase();
+          return filename.endsWith('.mp3') || 
+                 filename.endsWith('.wav') || 
+                 filename.endsWith('.ogg') || 
+                 filename.endsWith('.m4a');
+        }
       }
-      return content && content.mimeType && content.mimeType.startsWith('audio/');
+      
+      // Traditional attachment format (simple object with mimeType)
+      if (typeof content === 'string') {
+        try {
+          const parsedContent = JSON.parse(content);
+          return (
+            parsedContent &&
+            parsedContent.mimeType &&
+            parsedContent.mimeType.startsWith('audio/')
+          );
+        } catch {
+          return false;
+        }
+      }
+      
+      // Direct object with mimeType
+      return content && 
+             content.mimeType && 
+             content.mimeType.startsWith('audio/');
     } catch (e) {
+      console.error('Error in isAudioAttachment:', e);
       return false;
     }
   };
@@ -721,6 +780,54 @@ const ChatPage: React.FC = () => {
       // Check if this is an audio attachment
       if (isAudioAttachment(content)) {
         try {
+          // For XMTP attachment format structure
+          if (content && content.type && 
+              content.type.authorityId === 'xmtp.org' && 
+              content.type.typeId === 'attachment') {
+            
+            // Extract parameters and content from XMTP attachment format
+            const { parameters, content: attachmentContent } = content;
+            const mimeType = parameters?.mimeType || 'audio/mpeg';
+            const filename = parameters?.filename || 'Audio message';
+            
+            console.log('Processing XMTP attachment format:', {
+              filename,
+              mimeType,
+              contentSize: attachmentContent ? (
+                attachmentContent instanceof Uint8Array ? 
+                  attachmentContent.length : 
+                  'Non-Uint8Array content'
+              ) : 'No content'
+            });
+            
+            // Create audio blob if we have binary content
+            let audioUrl = '';
+            if (attachmentContent && attachmentContent instanceof Uint8Array) {
+              audioUrl = URL.createObjectURL(new Blob([attachmentContent], { type: mimeType }));
+            }
+            
+            if (audioUrl) {
+              return (
+                <AudioMessage 
+                  src={audioUrl} 
+                  filename={filename} 
+                  isOwnMessage={msg.sender !== 'bot'}
+                />
+              );
+            }
+            
+            // If we don't have binary content but have a fallback message
+            if (content.fallback) {
+              return (
+                <div>
+                  <p className="text-sm text-amber-400">Audio attachment available but cannot be played</p>
+                  <p className="text-xs text-gray-400">{content.fallback}</p>
+                </div>
+              );
+            }
+          }
+          
+          // Traditional attachment format handling
           const audioContent = typeof content === 'string' 
             ? JSON.parse(content) 
             : content;
