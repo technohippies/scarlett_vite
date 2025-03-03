@@ -208,7 +208,7 @@ const ChatPage: React.FC = () => {
         console.log('Bot conversation created or loaded:', conversation);
         
         // Inspect the conversation to understand its structure
-        inspectConversation(conversation, 'Bot Conversation');
+        // inspectConversation(conversation, 'Bot Conversation');
       } catch (error) {
         console.error('Error creating bot conversation:', error);
         setSendStatus('Error connecting to bot. Please try again.');
@@ -290,7 +290,7 @@ const ChatPage: React.FC = () => {
         
         console.log(`Loaded ${messages.length} messages`);
         setChatMessages(messages);
-        setSendStatus('Connected to bot');
+        setSendStatus(null);
         
         // Set up message stream using the messaging service
         try {
@@ -354,27 +354,56 @@ const ChatPage: React.FC = () => {
         return;
       }
       
-      // Set status to sending
-      setSendStatus('Sending message...');
-      setIsSendingMessage(true);
+      // Create a temporary message to show immediately
+      const tempMessage: ChatMessage = {
+        id: `temp-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
+        content: messageText,
+        sender: 'user', // Simple string value to avoid type errors
+        timestamp: new Date(),
+        isBot: false, // Explicitly mark as not a bot message
+        // Ensure it's not identified as a bot message
+        rawMessage: {
+          senderInboxId: 'user-temp-id' // This will not match botInboxId
+        },
+        sending: true // Mark as sending
+      } as any; // Use type assertion for the custom properties
       
-      // We'll no longer add the message to the UI immediately
-      // The message will be added when it comes back through the stream
+      // Add the temporary message to the chat
+      setChatMessages((prev) => [...prev, tempMessage]);
+      
+      // Set sending state
+      setIsSendingMessage(true);
       
       try {
         // Send the message using the messaging service
         console.log('Sending message to bot:', messageText);
         await xmtpMessagingService.sendMessage(botConversation, messageText);
         
-        // Update status
-        setSendStatus('Message sent');
-      } catch (error) {
+        // The real message will be added when it comes back through the stream
+        // We can remove the temporary message once we know it's sent
+        setTimeout(() => {
+          setChatMessages((prev) => 
+            prev.filter(msg => msg.id !== tempMessage.id)
+          );
+        }, 500);
+        
+      } catch (error: any) {
         console.error('Error sending message:', error);
-        setSendStatus('Error sending message');
+        
+        // Mark the temporary message as having an error
+        setChatMessages((prev) => 
+          prev.map(msg => 
+            msg.id === tempMessage.id 
+              ? { ...msg, sending: false, error: true } as any
+              : msg
+          )
+        );
+        
+        setSendStatus(`Error sending message: ${error.message || 'Unknown error'}`);
       } finally {
         setIsSendingMessage(false);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error in sendMessageToBot:', error);
       setSendStatus('Error sending message');
       setIsSendingMessage(false);
@@ -391,8 +420,7 @@ const ChatPage: React.FC = () => {
         return;
       }
       
-      // Set status to sending
-      setSendStatus('Sending audio message...');
+      // Set sending state
       setIsSendingMessage(true);
       
       // Make sure the attachment module is loaded
@@ -403,16 +431,21 @@ const ChatPage: React.FC = () => {
       }
       
       // Create a temporary user message to add to the UI immediately
-      const tempUserMessage: ChatMessage = {
-        id: `user-audio-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
-        content: 'Sending audio message...',
+      const tempMessage: ChatMessage = {
+        id: `temp-audio-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
+        content: 'Audio message',
         sender: 'user',
         timestamp: new Date(),
-        isBot: false
-      };
+        isBot: false, // Explicitly mark as not a bot message
+        // Ensure it's not identified as a bot message
+        rawMessage: {
+          senderInboxId: 'user-temp-id' // This will not match botInboxId
+        },
+        sending: true // Mark as sending
+      } as any;
       
       // Add the temporary message to the UI
-      setChatMessages(prev => [...prev, tempUserMessage]);
+      setChatMessages(prev => [...prev, tempMessage]);
       
       // Get the attachment codec from the XMTP context
       const { AttachmentCodec } = xmtp.attachmentModule || {};
@@ -441,20 +474,32 @@ const ChatPage: React.FC = () => {
           { content: attachment, contentType: AttachmentCodec }
         );
         
-        // Update status
-        setSendStatus('Audio message sent');
-      } catch (error) {
+        // The real message will be added when it comes back through the stream
+        // We can remove the temporary message once we know it's sent
+        setTimeout(() => {
+          setChatMessages((prev) => 
+            prev.filter(msg => msg.id !== tempMessage.id)
+          );
+        }, 500);
+      } catch (error: any) {
         console.error('Error sending audio message:', error);
-        setSendStatus('Error sending audio message');
         
-        // Remove the temporary message
-        setChatMessages(prev => prev.filter(msg => msg.id !== tempUserMessage.id));
+        // Mark the temporary message as having an error
+        setChatMessages((prev) => 
+          prev.map(msg => 
+            msg.id === tempMessage.id 
+              ? { ...msg, sending: false, error: true } as any
+              : msg
+          )
+        );
+        
+        setSendStatus(`Error sending audio message: ${error.message || 'Unknown error'}`);
       } finally {
         setIsSendingMessage(false);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error in sendAudioAttachment:', error);
-      setSendStatus('Error sending audio message');
+      setSendStatus(`Error sending audio message: ${error.message || 'Unknown error'}`);
       setIsSendingMessage(false);
     }
   };
@@ -783,8 +828,9 @@ const ChatPage: React.FC = () => {
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {chatMessages.map(msg => {
             // Determine if this is a bot message by checking the senderInboxId
-            const isBotMessage = msg.isBot || 
-                               (msg as any).rawMessage?.senderInboxId === botInboxId;
+            // For temporary messages (with sending=true), always treat as user messages
+            const isBotMessage = (msg as any).sending ? false : 
+                               (msg.isBot || (msg as any).rawMessage?.senderInboxId === botInboxId);
             
             return (
               <div 
@@ -801,35 +847,22 @@ const ChatPage: React.FC = () => {
                   }`}
                 >
                   {renderMessageContent({...msg, isBot: isBotMessage} as ChatMessage)}
-                  <p className="text-xs opacity-70 mt-1">
-                    {formatMessageTime(msg.timestamp)}
-                  </p>
+                  <div className="flex items-center justify-between mt-1">
+                    <p className="text-xs opacity-70">
+                      {formatMessageTime(msg.timestamp)}
+                    </p>
+                    {(msg as any).sending && (
+                      <div className="animate-spin ml-2 h-3 w-3 border-2 border-current rounded-full border-t-transparent opacity-70"></div>
+                    )}
+                    {(msg as any).error && (
+                      <span className="ml-2 text-red-400 text-xs">⚠️</span>
+                    )}
+                  </div>
                 </div>
                 <MessageDebugPanel message={{...msg, isBot: isBotMessage}} />
               </div>
             );
           })}
-
-          {sendStatus && (
-            <div className={`p-2 rounded flex items-center ${
-              sendStatus.includes('Error') 
-                ? 'bg-red-900/20 text-red-400' 
-                : sendStatus.includes('Sending') 
-                  ? 'bg-blue-900/20 text-blue-400' 
-                  : 'bg-green-900/20 text-green-400'
-            }`}>
-              {sendStatus.includes('Sending') && (
-                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current rounded-full border-t-transparent"></div>
-              )}
-              {sendStatus.includes('Error') && (
-                <span className="mr-2">⚠️</span>
-              )}
-              {sendStatus.includes('sent') && (
-                <span className="mr-2">✓</span>
-              )}
-              {sendStatus}
-            </div>
-          )}
           
           <div ref={messagesEndRef} />
         </div>
