@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CaretLeft } from '@phosphor-icons/react';
 // import { Gear } from '@phosphor-icons/react';
@@ -6,6 +6,9 @@ import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
+import AudioMessage from '../../components/AudioMessage';
+// Import the attachment helper
+import { loadXmtpAttachmentModule } from '../../utils/xmtpAttachmentHelper';
 
 // Simple date formatter function to prevent Invalid Date issues
 const formatMessageTime = (timestamp: Date) => {
@@ -501,6 +504,85 @@ const ChatPage: React.FC = () => {
     }
   };
   
+  // Function to send an audio attachment
+  const sendAudioAttachment = async (audioFile: File) => {
+    if (!xmtp || !xmtp.client) {
+      setSendStatus('Please connect to XMTP first');
+      return;
+    }
+    
+    try {
+      setSendStatus('Preparing audio message...');
+      
+      // Load the attachment module
+      const attachmentModule = await loadXmtpAttachmentModule();
+      
+      // Create a conversation if it doesn't exist
+      let conversation;
+      try {
+        conversation = await xmtp.createBotConversation();
+        setBotConversation(conversation);
+      } catch (error: any) {
+        console.error('Error getting or creating conversation:', error);
+        setSendStatus(`Error: ${error.message}`);
+        return;
+      }
+      
+      if (conversation) {
+        // Generate a client-side ID for this message
+        const clientGeneratedId = `client-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+        
+        // Read the file as an ArrayBuffer
+        const arrayBuffer = await audioFile.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        // Create the attachment
+        const attachment = {
+          filename: audioFile.name,
+          mimeType: audioFile.type,
+          data: uint8Array
+        };
+        
+        // Add the message to the local chat immediately for better UX
+        const newMessage = {
+          id: clientGeneratedId,
+          clientGeneratedId,
+          content: attachment,
+          sender: 'user',
+          timestamp: new Date(),
+          isBot: false,
+          direction: 'sent'
+        };
+        
+        setChatMessages(prev => {
+          // Check if this message already exists in our chat
+          const messageExists = prev.some(msg => 
+            msg.clientGeneratedId === clientGeneratedId
+          );
+          
+          if (messageExists) {
+            console.log('Message already exists in chat, not adding duplicate');
+            return prev;
+          }
+          
+          return [...prev, newMessage];
+        });
+        
+        // Encode and send the attachment
+        setSendStatus('Sending audio message...');
+        const codec = new attachmentModule.AttachmentCodec();
+        const encoded = await codec.encode(attachment);
+        await conversation.send(encoded, attachmentModule.ContentTypeAttachment);
+        
+        console.log('Audio message sent successfully!');
+        setSendStatus(null);
+      }
+    } catch (error) {
+      console.error('Error sending audio message:', error);
+      setSendStatus(`Error sending audio message: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  
   const handleSendMessage = async (messageContent: string) => {
     if (!messageContent.trim()) return;
     
@@ -584,6 +666,51 @@ const ChatPage: React.FC = () => {
     } catch (error) {
       console.error('Error connecting to XMTP:', error);
       setConnectionError(error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+  
+  // Add a function to check if a message is an audio attachment
+  const isAudioAttachment = (content: any): boolean => {
+    try {
+      if (typeof content === 'string') {
+        const parsedContent = JSON.parse(content);
+        return (
+          parsedContent &&
+          parsedContent.mimeType &&
+          parsedContent.mimeType.startsWith('audio/')
+        );
+      }
+      return content && content.mimeType && content.mimeType.startsWith('audio/');
+    } catch (e) {
+      return false;
+    }
+  };
+
+  // Function to render message content based on type
+  const renderMessageContent = (msg: any) => {
+    try {
+      // Check if it's an audio message
+      if (isAudioAttachment(msg.content)) {
+        const content = typeof msg.content === 'string' 
+          ? JSON.parse(msg.content) 
+          : msg.content;
+        
+        return (
+          <AudioMessage 
+            src={content.url || URL.createObjectURL(new Blob([content.data], { type: content.mimeType }))} 
+            filename={content.filename || 'Audio message'} 
+            isOwnMessage={msg.sender !== 'bot'}
+          />
+        );
+      }
+      
+      // Default text message
+      return (
+        <p className="text-sm whitespace-pre-wrap break-words">{msg.content}</p>
+      );
+    } catch (error) {
+      console.error('Error rendering message:', error);
+      return <p className="text-sm text-red-400">Error displaying message</p>;
     }
   };
   
@@ -687,6 +814,7 @@ const ChatPage: React.FC = () => {
         <div className="border-neutral-700 bg-neutral-900">
                 <ChatInput 
                   onSendMessage={handleSendMessage} 
+                  onSendAudio={sendAudioAttachment}
                   placeholder={t('chat.placeholder')}
                 />
         </div>

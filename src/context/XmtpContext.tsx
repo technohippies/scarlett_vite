@@ -1,10 +1,13 @@
-import React, { createContext, useContext, useState, ReactNode, useRef, useCallback } from 'react';
+import React, { createContext, useContext, useState, ReactNode, useRef, useCallback, useEffect } from 'react';
 // Import directly from @xmtp/browser-sdk
 import { Client } from '@xmtp/browser-sdk';
+
 // Import ethers for wallet connection
 import { ethers } from 'ethers';
 // Import constants
 import { SCARLETT_BOT_ADDRESS } from '../lib/constants';
+// Import our attachment helper
+import { loadXmtpAttachmentModule } from '../utils/xmtpAttachmentHelper';
 
 // Define our own types to avoid conflicts
 interface Conversation {
@@ -32,6 +35,14 @@ interface XmtpContextType {
   canMessage: (address: string) => Promise<boolean>;
   getOrCreateConversation: (peerAddress: string) => Promise<any>;
   createBotConversation: () => Promise<any>;
+  // Add attachment module properties
+  attachmentModule: {
+    ContentTypeAttachment: any;
+    AttachmentCodec: any;
+    RemoteAttachmentCodec: any;
+    ContentTypeRemoteAttachment: any;
+    isLoaded: boolean;
+  };
 }
 
 // Create context
@@ -115,11 +126,26 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   const [connectionError, setConnectionError] = useState<Error | null>(null);
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   
+  // Add state for attachment module
+  const [attachmentModule, setAttachmentModule] = useState<{
+    ContentTypeAttachment: any;
+    AttachmentCodec: any;
+    RemoteAttachmentCodec: any;
+    ContentTypeRemoteAttachment: any;
+    isLoaded: boolean;
+  }>({
+    ContentTypeAttachment: null,
+    AttachmentCodec: null,
+    RemoteAttachmentCodec: null,
+    ContentTypeRemoteAttachment: null,
+    isLoaded: false
+  });
+  
   // Add refs to track connection attempts and prevent race conditions
   const connectionAttemptedRef = useRef(false);
   const clientCreationInProgressRef = useRef(false);
   const encryptionKeyRef = useRef<Uint8Array | null>(null);
-
+  
   logger.debug('XmtpProvider state:', { 
     hasClient: !!client, 
     isConnected, 
@@ -128,6 +154,45 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     hasError: !!connectionError
   });
   
+  // Load the attachment module
+  useEffect(() => {
+    const loadAttachmentModule = async () => {
+      try {
+        const module = await loadXmtpAttachmentModule();
+        setAttachmentModule({
+          ...module,
+          isLoaded: true
+        });
+        logger.info('Attachment module loaded successfully');
+      } catch (error) {
+        logger.error('Failed to load attachment module:', error);
+      }
+    };
+    
+    loadAttachmentModule();
+  }, []);
+  
+  // Register codecs when client is created
+  useEffect(() => {
+    if (client && attachmentModule.isLoaded) {
+      try {
+        // Register the attachment codec
+        if (attachmentModule.AttachmentCodec) {
+          client.registerCodec(new attachmentModule.AttachmentCodec());
+          logger.info('Registered AttachmentCodec');
+        }
+        
+        // Register the remote attachment codec
+        if (attachmentModule.RemoteAttachmentCodec) {
+          client.registerCodec(new attachmentModule.RemoteAttachmentCodec());
+          logger.info('Registered RemoteAttachmentCodec');
+        }
+      } catch (error) {
+        logger.error('Failed to register codecs:', error);
+      }
+    }
+  }, [client, attachmentModule.isLoaded]);
+
   // Load conversations when client is available
   const loadConversations = useCallback(async () => {
     if (!client) {
@@ -933,7 +998,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     loadConversations,
     canMessage,
     getOrCreateConversation,
-    createBotConversation
+    createBotConversation,
+    attachmentModule
   };
 
   // Return the provider with the context value

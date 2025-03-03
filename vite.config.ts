@@ -4,6 +4,8 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import tsconfigPaths from 'vite-tsconfig-paths'
 import { nodePolyfills } from 'vite-plugin-node-polyfills'
+// Import our custom worker polyfill plugin
+import workerPolyfillPlugin from './vite-worker-polyfill-plugin'
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -28,6 +30,8 @@ export default defineConfig({
       },
       protocolImports: false,
     }),
+    // Add our custom worker polyfill plugin
+    workerPolyfillPlugin(),
   ],
   resolve: {
     alias: {
@@ -35,6 +39,8 @@ export default defineConfig({
       'protobufjs/minimal.js': 'protobufjs/minimal',
       // Add explicit alias for crypto
       'crypto': 'crypto-browserify',
+      // Add alias for XMTP remote attachment module
+      '@xmtp/content-type-remote-attachment': path.resolve(__dirname, './src/utils/xmtpModuleShim.ts'),
     },
     mainFields: ['browser', 'module', 'main'],
   },
@@ -42,6 +48,8 @@ export default defineConfig({
     // Fix for browserify-sign
     'process.browser': true,
     'process.env': '{}',
+    // Ensure Buffer is globally available
+    'global.Buffer': 'Buffer',
   },
   optimizeDeps: {
     exclude: [
@@ -117,5 +125,18 @@ export default defineConfig({
         }
       }
     }
+  },
+  // Configure worker options to inject Buffer polyfill
+  worker: {
+    format: 'es',
+    // Add a plugin to inject our Buffer polyfill into all workers
+    plugins: () => [
+      nodePolyfills({
+        include: ['buffer'],
+        globals: {
+          Buffer: true,
+        },
+      }),
+    ],
   },
 })
