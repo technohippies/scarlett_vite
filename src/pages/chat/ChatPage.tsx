@@ -594,17 +594,7 @@ const ChatPage: React.FC = () => {
       if (content === null || content === undefined) {
         return <p className="text-sm text-red-400">Empty message</p>;
       }
-      
-      // Check if this is an audio message with audio_cid
-      if (msg.audio_cid) {
-        return (
-          <AudioMessage 
-            src={`https://gateway.irys.xyz/${msg.audio_cid}`} 
-            isOwnMessage={!msg.isBot}
-          />
-        );
-      }
-      
+            
       // Check if this is an audio attachment
       if (isAudioAttachment(content)) {
         try {
@@ -752,7 +742,22 @@ const ChatPage: React.FC = () => {
           )}
           
           {sendStatus && (
-            <div className={`p-2 rounded ${sendStatus.includes('Error') ? 'bg-red-900/20 text-red-400' : 'bg-blue-900/20 text-blue-400'}`}>
+            <div className={`p-2 rounded flex items-center ${
+              sendStatus.includes('Error') 
+                ? 'bg-red-900/20 text-red-400' 
+                : sendStatus.includes('Sending') 
+                  ? 'bg-blue-900/20 text-blue-400' 
+                  : 'bg-green-900/20 text-green-400'
+            }`}>
+              {sendStatus.includes('Sending') && (
+                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current rounded-full border-t-transparent"></div>
+              )}
+              {sendStatus.includes('Error') && (
+                <span className="mr-2">⚠️</span>
+              )}
+              {sendStatus.includes('sent') && (
+                <span className="mr-2">✓</span>
+              )}
               {sendStatus}
             </div>
           )}
@@ -806,12 +811,37 @@ const ChatPage: React.FC = () => {
           })}
 
           {sendStatus && (
-            <div className={`p-2 rounded ${sendStatus.includes('Error') ? 'bg-red-900/20 text-red-400' : 'bg-blue-900/20 text-blue-400'}`}>
+            <div className={`p-2 rounded flex items-center ${
+              sendStatus.includes('Error') 
+                ? 'bg-red-900/20 text-red-400' 
+                : sendStatus.includes('Sending') 
+                  ? 'bg-blue-900/20 text-blue-400' 
+                  : 'bg-green-900/20 text-green-400'
+            }`}>
+              {sendStatus.includes('Sending') && (
+                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current rounded-full border-t-transparent"></div>
+              )}
+              {sendStatus.includes('Error') && (
+                <span className="mr-2">⚠️</span>
+              )}
+              {sendStatus.includes('sent') && (
+                <span className="mr-2">✓</span>
+              )}
               {sendStatus}
             </div>
           )}
           
           <div ref={messagesEndRef} />
+        </div>
+        
+        {/* Chat input */}
+        <div className="border-t border-neutral-700 bg-neutral-900">
+          <ChatInput 
+            onSendMessage={sendMessageToBot} 
+            onSendAudio={sendAudioAttachment}
+            placeholder={t('chat.placeholder')}
+            disabled={isSendingMessage}
+          />
         </div>
       </div>
     </div>
