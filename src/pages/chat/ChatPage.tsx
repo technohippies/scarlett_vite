@@ -312,13 +312,22 @@ const ChatPage: React.FC = () => {
                 console.log('New message received:', message);
                 
                 // Add the message to our state
-              setChatMessages(prev => {
-                // Check if we already have this message
+                setChatMessages(prev => {
+                  // Check if we already have this message
                   const exists = prev.some(m => m.id === message.id);
                   if (exists) {
-                  return prev;
-                }
-                  return [...prev, message];
+                    return prev;
+                  }
+                  
+                  // Remove any temporary messages with the same content
+                  // This prevents duplicate messages when sending
+                  const filtered = prev.filter(m => 
+                    !(m.id.startsWith('temp-') && 
+                      m.content === message.content && 
+                      (m as any).sending === true)
+                  );
+                  
+                  return [...filtered, message];
                 });
               },
               onError: (error) => {
@@ -460,7 +469,8 @@ const ChatPage: React.FC = () => {
       });
       
       try {
-        // Send the attachment using the messaging service
+        // Send the audio attachment
+        console.log('Sending audio attachment:', audioFile.name);
         await xmtpMessagingService.sendMessage(
           botConversation,
           { content: attachment, contentType: AttachmentCodec }
