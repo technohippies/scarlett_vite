@@ -6,37 +6,6 @@
  */
 
 /**
- * Safely converts an object to a string, handling circular references
- */
-const safeStringify = (obj: any, indent = 2): string => {
-  const cache = new Set();
-  return JSON.stringify(
-    obj,
-    (key, value) => {
-      if (typeof value === 'object' && value !== null) {
-        // Handle circular references
-        if (cache.has(value)) {
-          return '[Circular Reference]';
-        }
-        cache.add(value);
-        
-        // Handle functions
-        if (typeof value === 'function') {
-          return `[Function: ${value.name || 'anonymous'}]`;
-        }
-        
-        // Handle promises
-        if (value instanceof Promise) {
-          return '[Promise]';
-        }
-      }
-      return value;
-    },
-    indent
-  );
-};
-
-/**
  * Logs the complete structure of an XMTP message
  */
 export const inspectMessage = (message: any, label = 'Message Structure'): void => {

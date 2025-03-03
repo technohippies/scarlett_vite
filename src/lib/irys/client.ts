@@ -2,7 +2,6 @@ import { QuestionWithResponse } from '../../types/song';
 import { ethers } from 'ethers';
 import { WebUploader } from "@irys/web-upload";
 import { WebEthereum } from "@irys/web-upload-ethereum";
-import { EthersV6Adapter } from "@irys/web-upload-ethereum-ethers-v6";
 
 // Define the structure for user progress data
 export interface UserProgress {
@@ -95,20 +94,20 @@ class IrysService {
 
     try {
       // Create ethers provider
-      const ethersProvider = new ethers.BrowserProvider(provider);
+      const ethersProvider = new ethers.providers.Web3Provider(provider);
       console.log('IrysService: Created ethers provider');
 
       // Get signer
-      const signer = await ethersProvider.getSigner();
+      const signer = ethersProvider.getSigner();
       console.log('IrysService: Got signer');
 
-      // Initialize Irys with Ethers v6 adapter
-      console.log('IrysService: Initializing Irys with Ethers v6 adapter...');
+      // Initialize Irys with Ethers adapter
+      console.log('IrysService: Initializing Irys with Ethers...');
       
       try {
         // Use WebUploader as a function (not a constructor)
         const builder = WebUploader(WebEthereum)
-          .withAdapter(EthersV6Adapter(ethersProvider));
+          .withProvider(ethersProvider);
         
         // Apply devnet configuration if needed
         if (this.isDevnet) {

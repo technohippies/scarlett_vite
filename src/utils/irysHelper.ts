@@ -3,7 +3,6 @@
  */
 import { WebUploader } from "@irys/web-upload";
 import { WebEthereum } from "@irys/web-upload-ethereum";
-import { EthersV6Adapter } from "@irys/web-upload-ethereum-ethers-v6";
 import { ethers } from "ethers";
 
 // Ensure crypto polyfill is available
@@ -92,10 +91,10 @@ export const createIrysUploader = async () => {
     
     // Create provider and uploader
     // @ts-ignore - ethereum provider type issues
-    const provider = new ethers.BrowserProvider(window.ethereum);
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
     
     // Configure Irys with specific network settings
-    const irysUploader = await WebUploader(WebEthereum).withAdapter(EthersV6Adapter(provider));
+    const irysUploader = await WebUploader(WebEthereum).withProvider(provider);
     
     // Use node1 for better reliability
     console.log(`[Irys] Connected to Irys: ${irysUploader.address}`);

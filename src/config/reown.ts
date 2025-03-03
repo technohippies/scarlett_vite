@@ -1,5 +1,6 @@
 import { cookieStorage, createStorage } from '@wagmi/core';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
+import { Ethers5Adapter } from '@reown/appkit-adapter-ethers5';
 
 // Get projectId from environment variable
 // Using import.meta.env for Vite
@@ -41,5 +42,8 @@ export const wagmiAdapter = new WagmiAdapter({
   projectId,
   networks
 });
+
+// Set up the Ethers v5 Adapter
+export const ethers5Adapter = new Ethers5Adapter();
 
 export const config = wagmiAdapter.wagmiConfig; 

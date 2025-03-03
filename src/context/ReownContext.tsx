@@ -1,7 +1,7 @@
 import React, { createContext, useContext, ReactNode, useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cookieToInitialState, WagmiProvider } from 'wagmi';
-import { wagmiAdapter, projectId, customBaseSepolia } from '../config/reown';
+import { wagmiAdapter, projectId, customBaseSepolia, ethers5Adapter } from '../config/reown';
 import { ethers } from 'ethers';
 
 // Set up queryClient
@@ -10,7 +10,7 @@ const queryClient = new QueryClient();
 // Create context for AppKit and Ethers
 interface AppKitContextType {
   appKit: any;
-  ethersProvider: ethers.BrowserProvider | null;
+  ethersProvider: ethers.providers.Web3Provider | null;
   ethersSigner: ethers.Signer | null;
   isConnected: boolean;
   address: string | null;
@@ -69,7 +69,7 @@ const ReownProvider: React.FC<ReownProviderProps> = ({
   cookies = null 
 }) => {
   const [appKit, setAppKit] = useState<any>(null);
-  const [ethersProvider, setEthersProvider] = useState<ethers.BrowserProvider | null>(null);
+  const [ethersProvider, setEthersProvider] = useState<ethers.providers.Web3Provider | null>(null);
   const [ethersSigner, setEthersSigner] = useState<ethers.Signer | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [address, setAddress] = useState<string | null>(null);
@@ -97,7 +97,7 @@ const ReownProvider: React.FC<ReownProviderProps> = ({
         
         // Create the AppKit instance
         const appKitInstance = createAppKit({
-          adapters: [wagmiAdapter],
+          adapters: [ethers5Adapter],
           projectId: projectId || '',
           networks: [customBaseSepolia],
           defaultNetwork: customBaseSepolia,
@@ -119,7 +119,7 @@ const ReownProvider: React.FC<ReownProviderProps> = ({
         // Initialize ethers provider if window.ethereum is available
         if (window.ethereum) {
           // Use any type to bypass TypeScript checking
-          const provider = new ethers.BrowserProvider(window.ethereum as any);
+          const provider = new ethers.providers.Web3Provider(window.ethereum as any);
           setEthersProvider(provider);
           console.log('Ethers provider initialized');
           
@@ -127,7 +127,7 @@ const ReownProvider: React.FC<ReownProviderProps> = ({
           try {
             const accounts = await provider.listAccounts();
             if (accounts.length > 0) {
-              const signer = await provider.getSigner();
+              const signer = provider.getSigner();
               const userAddress = await signer.getAddress();
               
               setEthersSigner(signer);
@@ -165,14 +165,14 @@ const ReownProvider: React.FC<ReownProviderProps> = ({
       }
       
       // Create provider if not already created
-      const provider = new ethers.BrowserProvider(ethereum);
+      const provider = new ethers.providers.Web3Provider(ethereum);
       setEthersProvider(provider);
       
       // Request accounts
       await ethereum.request({ method: 'eth_requestAccounts' });
       
       // Get signer
-      const signer = await provider.getSigner();
+      const signer = provider.getSigner();
       const userAddress = await signer.getAddress();
       
       setEthersSigner(signer);

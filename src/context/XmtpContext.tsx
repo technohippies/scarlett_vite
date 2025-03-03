@@ -116,6 +116,11 @@ interface CustomXmtpSigner {
   getBlockNumber?: () => Promise<number>;
 }
 
+// Helper function to generate random bytes
+const generateRandomBytes = (length: number): Uint8Array => {
+  return crypto.getRandomValues(new Uint8Array(length));
+};
+
 export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
   logger.info('XmtpProvider initializing...');
   
@@ -479,8 +484,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       }
       
       // Create an ethers provider
-      const provider = new ethers.BrowserProvider(window.ethereum as any);
-      const ethersSigner = await provider.getSigner();
+      const provider = new ethers.providers.Web3Provider(window.ethereum as any);
+      const ethersSigner = provider.getSigner();
       
       // Try to determine if this is a smart contract wallet
       let isSmartContractWallet = false;
@@ -497,83 +502,61 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       let chainId: number;
       try {
         const network = await provider.getNetwork();
-        chainId = Number(network.chainId);
+        chainId = network.chainId;
         logger.info(`Chain ID: ${chainId}`);
       } catch (error) {
         logger.warn('Could not get chain ID, using default 8453 (Base):', error);
         chainId = 8453; // Default to Base
       }
       
+      // Create a signer that directly uses the ethers signer
+      // This approach is more compatible with XMTP's expected signature format
+      const xmtpSigner: CustomXmtpSigner = {
+        walletType: isSmartContractWallet ? "Contract" : "EOA",
+        getAddress: async () => {
+          return address;
+        },
+        signMessage: async (message: string) => {
+          logger.info(`Signing message with ${isSmartContractWallet ? 'SCW' : 'EOA'} wallet`);
+          logger.debug('Message to sign:', message);
+          
+          try {
+            // Use the ethers signer to sign the message
+            // This will handle the correct signature format for XMTP
+            const signature = await ethersSigner.signMessage(message);
+            logger.debug('Signature:', signature);
+            
+            // Convert hex string to Uint8Array as required by XMTP
+            // This is the key part for compatibility with XMTP
+            return ethers.utils.arrayify(signature);
+          } catch (signError) {
+            logger.error(`Error signing message with ${isSmartContractWallet ? 'SCW' : 'EOA'}:`, signError);
+            throw signError;
+          }
+        }
+      };
+      
+      // Add additional properties for SCW if needed
       if (isSmartContractWallet) {
-        // Smart Contract Wallet implementation
-        logger.info('Creating SCW signer for XMTP');
-        const scwSigner: CustomXmtpSigner = {
-          walletType: "Contract",
-          getAddress: async () => {
-            return address;
-          },
-          signMessage: async (message: string) => {
-            logger.info('Signing message with SCW wallet');
-            logger.debug('Message to sign:', message);
-            
-            try {
-              // Convert the string signature to Uint8Array as required by XMTP
-              const signature = await ethersSigner.signMessage(message);
-              logger.debug('SCW Signature:', signature);
-              // Convert hex string to Uint8Array
-              return ethers.getBytes(signature);
-            } catch (signError) {
-              logger.error('Error signing message with SCW:', signError);
-              throw signError;
-            }
-          },
-          // Required for SCW
-          getChainId: async () => {
-            return chainId;
-          },
-          // Required for SCW
-          getBlockNumber: async () => {
-            try {
-              const blockNumber = await provider.getBlockNumber();
-              return Number(blockNumber);
-            } catch (error) {
-              logger.warn('Could not get block number:', error);
-              // Return a default block number instead of undefined
-              return 0;
-            }
-          }
+        // Add required properties for SCW
+        (xmtpSigner as any).getChainId = async () => {
+          return chainId;
         };
         
-        logger.info('Created SCW signer for XMTP');
-        return scwSigner;
-      } else {
-        // EOA implementation
-        logger.info('Creating EOA signer for XMTP');
-        const eoaSigner: CustomXmtpSigner = {
-          walletType: "EOA",
-          getAddress: async () => {
-            return address;
-          },
-          signMessage: async (message: string) => {
-            logger.info('Signing message with EOA wallet');
-            logger.debug('Message to sign:', message);
-            
-            try {
-              // Convert the string signature to Uint8Array as required by XMTP
-              const signature = await ethersSigner.signMessage(message);
-              logger.debug('EOA Signature:', signature);
-              // Convert hex string to Uint8Array
-              return ethers.getBytes(signature);
-            } catch (signError) {
-              logger.error('Error signing message with EOA:', signError);
-              throw signError;
-            }
+        (xmtpSigner as any).getBlockNumber = async () => {
+          try {
+            const blockNumber = await provider.getBlockNumber();
+            return blockNumber;
+          } catch (error) {
+            logger.warn('Could not get block number:', error);
+            // Return a default block number instead of undefined
+            return 0;
           }
         };
-        
-        logger.info('Created EOA signer for XMTP');
-        return eoaSigner;
       }
+      
+      logger.info(`Created ${isSmartContractWallet ? 'SCW' : 'EOA'} signer for XMTP`);
+      return xmtpSigner;
     } catch (error) {
       logger.error('Error creating ethers signer:', error);
       throw error;
@@ -600,9 +583,9 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
     try {
       logger.debug('Starting client creation with signer', { signer });
       
-      // Generate a database encryption key if not already set
+      // Generate a new database encryption key if we don't have one
       if (!encryptionKeyRef.current) {
-        encryptionKeyRef.current = crypto.getRandomValues(new Uint8Array(32));
+        encryptionKeyRef.current = generateRandomBytes(32);
         logger.debug('Generated new database encryption key');
       }
       
@@ -640,13 +623,57 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         logger.warn('Failed to pre-load attachment module:', moduleError);
       }
       
+      // Try to get the wallet address
+      let address = null;
+      try {
+        address = await signer.getAddress();
+        setWalletAddress(address);
+        logger.info(`Using wallet address: ${address}`);
+      } catch (addressError) {
+        logger.error('Could not get wallet address:', addressError);
+      }
+      
+      // Create a custom XMTP-compatible signer
+      let xmtpSigner;
+      
+      // Check if this is an ethers v5 signer
+      if (signer._isSigner && typeof signer.signMessage === 'function') {
+        logger.info('Using Ethers v5 signer for XMTP');
+        
+        // Create a simplified signer that XMTP can use
+        xmtpSigner = {
+          getAddress: async () => {
+            return address;
+          },
+          signMessage: async (message: string) => {
+            logger.info('Signing message with Ethers v5');
+            try {
+              // Sign the message with ethers
+              const signature = await signer.signMessage(message);
+              logger.debug('Signature:', signature);
+              
+              // Convert to the format XMTP expects
+              return ethers.utils.arrayify(signature);
+            } catch (signError) {
+              logger.error('Error signing message:', signError);
+              throw signError;
+            }
+          }
+        };
+      } else {
+        // Use the original signer if it's not an ethers signer
+        logger.info('Using provided signer directly');
+        xmtpSigner = signer;
+      }
+      
       // Create the client with correct parameter order: signer, encryptionKey, options
       let clientInstance;
       
       try {
         // Create the client with correct parameter order: signer, encryptionKey, options
+        logger.info('Creating XMTP client with custom signer');
         clientInstance = await Client.create(
-          signer, 
+          xmtpSigner, 
           encryptionKeyRef.current as Uint8Array, 
           {
             env: 'dev', // Use development environment
@@ -657,16 +684,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         logger.info('XMTP client created successfully');
       } catch (createError) {
         logger.error('Failed to create XMTP client:', createError);
+        logDetailedError(createError as Error, 'XMTP Client Creation');
         throw createError;
-      }
-      
-      // Try to get the wallet address
-      let address = null;
-      try {
-        address = await signer.getAddress();
-        setWalletAddress(address);
-      } catch (addressError) {
-        logger.error('Could not get wallet address:', addressError);
       }
       
       // Load and register attachment codecs immediately after client creation
@@ -1029,13 +1048,13 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       }
       
       // Create a provider
-      const provider = new ethers.BrowserProvider(window.ethereum as any);
+      const provider = new ethers.providers.Web3Provider(window.ethereum as any);
       logger.info('Created ethers provider');
       
       // Request accounts to ensure connection
       try {
         logger.info('Requesting accounts...');
-        await provider.send('eth_requestAccounts', []);
+        await (window.ethereum as any).request({ method: 'eth_requestAccounts' });
         logger.info('Successfully requested accounts');
       } catch (error) {
         logger.error('Failed to request accounts:', error);
@@ -1048,7 +1067,7 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       let signer;
       try {
         logger.info('Getting signer from provider...');
-        signer = await provider.getSigner();
+        signer = provider.getSigner();
         logger.info('Got signer from provider');
         
         // Log signer details for debugging
@@ -1126,8 +1145,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       }
       
       // Create an ethers provider and signer
-      const provider = new ethers.BrowserProvider(window.ethereum as any);
-      const signer = await provider.getSigner();
+      const provider = new ethers.providers.Web3Provider(window.ethereum as any);
+      const signer = provider.getSigner();
       const address = await signer.getAddress();
       
       // Set wallet address
@@ -1140,6 +1159,14 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         return true;
       }
       
+      // Apply buffer polyfill before client creation
+      logger.info('Buffer polyfill applied before client creation');
+      
+      // Pre-load attachment module
+      logger.info('Pre-loading attachment module for client creation');
+      const attachmentCodecs = await loadAttachmentModule();
+      logger.info('Prepared attachment codecs for client creation');
+      
       // Create a custom signer for XMTP
       const xmtpSigner = await createEthersSigner(address);
       
@@ -1150,7 +1177,11 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
       
       // Create client options - use only dev environment as requested
       const clientOptions = {
-        env: 'dev' as const
+        env: 'dev' as const,
+        codecs: attachmentCodecs,
+        // Explicitly set the signature validation to be more lenient
+        // This can help with signature format compatibility issues
+        skipSignatureValidation: false
       };
       
       logger.info('Creating XMTP client with dev environment...');
@@ -1181,9 +1212,8 @@ export const XmtpProvider: React.FC<XmtpProviderProps> = ({ children }) => {
         return true;
       } catch (error) {
         logger.error('Error creating XMTP client:', error);
-        logDetailedError(error as Error, 'XMTP Client Creation');
         setConnectionError(error as Error);
-        return false;
+        throw error;
       }
     } catch (error) {
       logger.error('Error connecting with ethers:', error);

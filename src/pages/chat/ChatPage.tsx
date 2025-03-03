@@ -3,14 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { CaretLeft } from '@phosphor-icons/react';
 import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
-import { useParams, useNavigate } from 'react-router-dom';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
 import AudioMessage from '../../components/AudioMessage';
 // Import the attachment helper
 import { loadXmtpAttachmentModule } from '../../utils/xmtpAttachmentHelper';
 import { KNOWN_BOT_INBOX_IDS } from '../../utils/botMessageUtils';
-import { inspectConversation, inspectClient } from '../../utils/messageInspector';
+import { inspectClient } from '../../utils/messageInspector';
 import { xmtpMessagingService } from '../../lib/xmtp/messagingService';
 import { ChatMessage } from '../../types/chat';
 
@@ -553,8 +552,20 @@ const ChatPage: React.FC = () => {
     try {
       console.log('Connecting to XMTP with signer:', reownSigner);
       
-      // Use the connectXmtp method which is available on the context
-      await xmtp.connectXmtp(reownSigner);
+      // Try the direct Ethers approach first
+      if (xmtp.connectWithEthers) {
+        console.log('Using connectWithEthers method');
+        const success = await xmtp.connectWithEthers();
+        
+        if (!success) {
+          console.log('connectWithEthers failed, falling back to connectXmtp');
+          // Fall back to the regular connect method
+          await xmtp.connectXmtp(reownSigner);
+        }
+      } else {
+        // Use the connectXmtp method which is available on the context
+        await xmtp.connectXmtp(reownSigner);
+      }
       
       // Check if we're connected
       if (xmtp.client) {
