@@ -5,12 +5,19 @@ export interface ChatMessage {
   timestamp: Date;
   isBot: boolean;
   audio_cid?: string;
+  senderInboxId?: string;
   // If the message is a structured response to a question
   questionResponse?: {
     uuid: string;
     answer: 'a' | 'b' | 'c' | 'd';
     explanation: string;
     audio_cid: string;
+  };
+  response?: {
+    uuid: string;
+    options: string[];
+    explanation: string;
+    audio_cid?: string;
   };
 }
 

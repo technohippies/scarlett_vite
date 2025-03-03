@@ -119,6 +119,13 @@ export class XmtpMessagingService {
         
         // Determine if message is from bot
         const isFromBot = this.isMessageFromBot(msg, options);
+        this.logger.log(`Message ${msg.id} isFromBot determination: ${isFromBot}`, {
+          senderAddress: msg.senderAddress,
+          senderInboxId: msg.senderInboxId,
+          ourWalletAddress: options.ourWalletAddress,
+          ourInboxId: options.ourInboxId,
+          botInboxId: options.botInboxId
+        });
         
         // Handle content that might be a Promise
         let resolvedContent;
@@ -181,7 +188,7 @@ export class XmtpMessagingService {
     }
 
     try {
-      this.logger.log('Setting up message stream...');
+      this.logger.log('Setting up message stream for conversation:', conversation.id || conversation.topic);
       
       // Inspect the conversation to understand its structure
       inspectConversation(conversation, 'Setting up stream for conversation');
@@ -204,7 +211,7 @@ export class XmtpMessagingService {
           return;
         }
         
-        this.logger.log('New message received from stream:', msg);
+        this.logger.log('🔄 New message received from stream:', msg.id);
         
         try {
           // Inspect the message to understand its structure
@@ -212,6 +219,13 @@ export class XmtpMessagingService {
           
           // Determine if message is from bot
           const isFromBot = this.isMessageFromBot(msg, options);
+          this.logger.log(`Stream message ${msg.id} isFromBot determination: ${isFromBot}`, {
+            senderAddress: msg.senderAddress,
+            senderInboxId: msg.senderInboxId,
+            ourWalletAddress: options.ourWalletAddress,
+            ourInboxId: options.ourInboxId,
+            botInboxId: options.botInboxId
+          });
           
           // Handle content that might be a Promise
           let resolvedContent = msg.content;
@@ -219,7 +233,8 @@ export class XmtpMessagingService {
             try {
               this.logger.log(`Stream message ${msg.id} content is a Promise, resolving...`);
               resolvedContent = await resolvedContent;
-              this.logger.log(`Stream message ${msg.id} content resolved:`, resolvedContent);
+              this.logger.log(`Stream message ${msg.id} content resolved:`, 
+                typeof resolvedContent === 'string' ? resolvedContent : 'non-string content');
             } catch (contentError) {
               this.logger.error('Error resolving stream message content:', contentError);
               resolvedContent = 'Error: Could not load message content';
@@ -232,6 +247,10 @@ export class XmtpMessagingService {
                               resolvedContent.type && 
                               resolvedContent.type.authorityId === 'xmtp.org' && 
                               resolvedContent.type.typeId === 'attachment';
+          
+          if (isAttachment) {
+            this.logger.log(`Message ${msg.id} is an attachment`);
+          }
 
           // Create a standardized message object
           const processedMessage: ChatMessage = {
@@ -242,12 +261,24 @@ export class XmtpMessagingService {
             sender: msg.senderAddress || msg.senderInboxId || 'unknown',
             timestamp: msg.sent instanceof Date ? msg.sent : new Date(msg.sentAtNs ? Number(msg.sentAtNs / BigInt(1000000)) : Date.now()),
             isBot: isFromBot,
+            senderInboxId: msg.senderInboxId, // Add this for debugging
             ...(options.includeRawMessage ? { rawMessage: msg } : {})
           };
           
+          this.logger.log(`✅ Processed message ${msg.id} ready for UI:`, {
+            id: processedMessage.id,
+            sender: processedMessage.sender,
+            isBot: processedMessage.isBot,
+            contentType: typeof processedMessage.content,
+            timestamp: processedMessage.timestamp
+          });
+          
           // Call the onMessage callback if provided
           if (options.onMessage) {
+            this.logger.log(`📤 Calling onMessage callback for message ${msg.id}`);
             options.onMessage(processedMessage);
+          } else {
+            this.logger.warn(`⚠️ No onMessage callback provided for message ${msg.id}`);
           }
         } catch (error) {
           this.logger.error('Error processing stream message:', error);
@@ -255,41 +286,54 @@ export class XmtpMessagingService {
       };
       
       // Set up the stream using the conversation.stream method
-      const stream = conversation.stream(onMessage);
+      this.logger.log(`Starting stream for conversation ${conversationId}`);
+      let stream;
+      try {
+        stream = conversation.stream(onMessage);
+        this.logger.log(`Stream created for conversation ${conversationId}`);
+      } catch (error) {
+        this.logger.error(`Error creating stream for conversation ${conversationId}:`, error);
+        throw error;
+      }
       
       // Store the stream reference in case we need to close it later
       if (conversationId) {
         this.activeStreams.set(conversationId, stream);
+        this.logger.log(`Stream stored in activeStreams map with key ${conversationId}`);
       }
       
       // Define the cleanup function
       const cleanup = () => {
         try {
-          this.logger.log('Cleaning up message stream...');
+          this.logger.log(`Cleaning up stream for conversation ${conversationId}`);
           
-          // Remove the stream from our active streams
+          // Close the stream
+          if (stream && typeof stream.close === 'function') {
+            stream.close();
+            this.logger.log(`Stream closed for conversation ${conversationId}`);
+          }
+          
+          // Remove from active streams
           if (conversationId) {
             this.activeStreams.delete(conversationId);
+            this.logger.log(`Stream removed from activeStreams map for key ${conversationId}`);
           }
           
-          // Unsubscribe from the stream
-          if (stream && typeof stream.unsubscribe === 'function') {
-            this.logger.log('Calling stream.unsubscribe()');
-            stream.unsubscribe();
-          } else {
-            this.logger.warn('Stream does not have an unsubscribe method:', stream);
+          // Call the onClose callback if provided
+          if (options.onClose) {
+            this.logger.log(`Calling onClose callback for conversation ${conversationId}`);
+            options.onClose();
           }
-          
-          this.logger.log('Message stream cleaned up successfully');
         } catch (error) {
-          this.logger.error('Error cleaning up message stream:', error);
+          this.logger.error(`Error cleaning up stream for conversation ${conversationId}:`, error);
         }
       };
-
+      
+      this.logger.log(`Message stream setup complete for conversation ${conversationId}`);
       return { stream, cleanup };
-    } catch (streamError) {
-      this.logger.error('Error setting up message stream:', streamError);
-      throw streamError;
+    } catch (error) {
+      this.logger.error('Error setting up message stream:', error);
+      throw error;
     }
   }
 
@@ -308,9 +352,21 @@ export class XmtpMessagingService {
       this.logger.log('Sending message to conversation:', conversation.id || conversation.topic);
       inspectConversation(conversation, 'Sending to Conversation');
       
+      // Log message content
+      this.logger.log('Message content to send:', 
+        typeof messageContent === 'string' 
+          ? messageContent.substring(0, 100) + (messageContent.length > 100 ? '...' : '') 
+          : 'object content');
+      
       // Send the message
       const sentMessage = await conversation.send(messageContent);
-      this.logger.log('Message sent successfully');
+      this.logger.log('Message sent successfully:', {
+        id: sentMessage.id,
+        contentType: sentMessage.contentType?.toString() || 'unknown',
+        senderAddress: sentMessage.senderAddress,
+        recipientAddress: sentMessage.recipientAddress,
+        sent: sentMessage.sent
+      });
       
       // Inspect the sent message
       inspectMessage(sentMessage, 'Sent Message');
@@ -337,23 +393,77 @@ export class XmtpMessagingService {
       this.logger.log('Checking if message is from bot:', {
         messageId: message.id,
         senderAddress: message.senderAddress,
-        senderInboxId: (message as any).senderInboxId,
+        senderInboxId: message.senderInboxId,
         ourWalletAddress: options.ourWalletAddress,
         botInboxId: options.botInboxId || KNOWN_BOT_INBOX_IDS[0]
       });
       
-      // Use the utility function to determine if the message is from a bot
-      const isBot = isBotMessage(
-        message, 
-        options.ourWalletAddress, 
-        options.botInboxId || KNOWN_BOT_INBOX_IDS[0]
-      );
+      // First, check if the message is from a known bot inbox ID
+      if (message.senderInboxId && 
+          (KNOWN_BOT_INBOX_IDS.includes(message.senderInboxId) || 
+           (options.botInboxId && message.senderInboxId === options.botInboxId))) {
+        this.logger.log(`Message ${message.id} is from bot (matched inbox ID)`);
+        return true;
+      }
       
-      this.logger.log(`Message ${message.id} isFromBot: ${isBot}`);
-      return isBot;
+      // Check if the message is from the bot's address
+      if (message.senderAddress && options.botInboxId && 
+          message.senderAddress.toLowerCase() === options.botInboxId.toLowerCase()) {
+        this.logger.log(`Message ${message.id} is from bot (matched address)`);
+        return true;
+      }
+      
+      // CRITICAL FIX: Check if the message is from the user by comparing with ourWalletAddress
+      // If it's from the user, it's NOT a bot message
+      if (options.ourWalletAddress && message.senderAddress) {
+        const isFromUser = message.senderAddress.toLowerCase() === options.ourWalletAddress.toLowerCase();
+        if (isFromUser) {
+          this.logger.log(`Message ${message.id} is NOT from bot (from user wallet address)`);
+          return false;
+        }
+      }
+      
+      // Check if the message is from the user's inbox
+      if (options.ourInboxId && message.senderInboxId) {
+        const isFromUserInbox = message.senderInboxId === options.ourInboxId;
+        if (isFromUserInbox) {
+          this.logger.log(`Message ${message.id} is NOT from bot (from user inbox)`);
+          return false;
+        }
+      }
+      
+      // If we have explicit direction information, use that
+      if (message.direction === 'received') {
+        this.logger.log(`Message ${message.id} is from bot (direction is 'received')`);
+        return true;
+      }
+      
+      // If we have an explicit isBot flag, use that
+      if (message.isBot === true) {
+        this.logger.log(`Message ${message.id} is from bot (has isBot flag)`);
+        return true;
+      }
+      
+      // If we know the bot's inbox ID and the user's inbox ID, and the message is not from the user,
+      // then it's likely from the bot
+      if (options.botInboxId && options.ourInboxId && message.senderInboxId !== options.ourInboxId) {
+        this.logger.log(`Message ${message.id} is from bot (not from user inbox, likely bot)`);
+        return true;
+      }
+      
+      // If we know the bot's address and the user's address, and the message is not from the user,
+      // then it's likely from the bot
+      if (options.botInboxId && options.ourWalletAddress && 
+          message.senderAddress && message.senderAddress.toLowerCase() !== options.ourWalletAddress.toLowerCase()) {
+        this.logger.log(`Message ${message.id} is from bot (not from user address, likely bot)`);
+        return true;
+      }
+      
+      // Default to false - assume it's from the user if we can't determine
+      this.logger.log(`Message ${message.id} is NOT from bot (default)`);
+      return false;
     } catch (error) {
-      this.logger.error('Error determining if message is from bot:', error);
-      // Default to false if we can't determine
+      this.logger.error('Error checking if message is from bot:', error);
       return false;
     }
   }
