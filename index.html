@@ -5,6 +5,40 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Vite + React + TS</title>
+    <!-- Add COOP/COEP headers for SharedArrayBuffer support -->
+    <meta http-equiv="Cross-Origin-Embedder-Policy" content="require-corp">
+    <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin">
+    <meta http-equiv="Cross-Origin-Resource-Policy" content="cross-origin">
+    <!-- Preload Buffer polyfill -->
+    <script>
+      // Ensure Buffer is available globally before any other scripts run
+      if (typeof window !== 'undefined' && typeof window.Buffer === 'undefined') {
+        try {
+          console.log('Preloading Buffer polyfill in index.html');
+          // Create a minimal Buffer implementation
+          window.Buffer = {
+            from: function(data, encoding) {
+              if (typeof data === 'string') {
+                const encoder = new TextEncoder();
+                const uint8Array = encoder.encode(data);
+                uint8Array.toString = function(encoding) {
+                  const decoder = new TextDecoder();
+                  return decoder.decode(this);
+                };
+                return uint8Array;
+              }
+              return data;
+            },
+            isBuffer: function(obj) {
+              return obj instanceof Uint8Array;
+            }
+          };
+          console.log('Minimal Buffer polyfill loaded in index.html');
+        } catch (err) {
+          console.error('Failed to preload Buffer polyfill:', err);
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -21,6 +21,7 @@
     "@unlock-protocol/networks": "^0.0.25",
     "@unlock-protocol/unlock-js": "^0.51.2",
     "@xmtp/browser-sdk": "0.0.21",
+    "@xmtp/content-type-remote-attachment": "^2.0.0",
     "axios": "^1.8.1",
     "buffer": "^6.0.3",
     "crypto-browserify": "^3.12.1",

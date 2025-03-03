@@ -63,7 +63,8 @@ interface ReownProviderProps {
   cookies?: string | null;
 }
 
-export const ReownProvider: React.FC<ReownProviderProps> = ({ 
+// Define the component as a regular function component, not as a named export
+const ReownProvider: React.FC<ReownProviderProps> = ({ 
   children, 
   cookies = null 
 }) => {
@@ -213,4 +214,5 @@ export const ReownProvider: React.FC<ReownProviderProps> = ({
   );
 };
 
+// Export as default only, not both named and default
 export default ReownProvider; 
