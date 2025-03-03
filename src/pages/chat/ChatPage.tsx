@@ -358,17 +358,8 @@ const ChatPage: React.FC = () => {
       setSendStatus('Sending message...');
       setIsSendingMessage(true);
       
-      // Create a user message to add to the UI immediately
-      const userMessage: ChatMessage = {
-        id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
-        content: messageText,
-        sender: 'user',
-        timestamp: new Date(),
-        isBot: false
-      };
-      
-      // Add the user message to the UI
-      setChatMessages(prev => [...prev, userMessage]);
+      // We'll no longer add the message to the UI immediately
+      // The message will be added when it comes back through the stream
       
       try {
         // Send the message using the messaging service
@@ -615,7 +606,6 @@ const ChatPage: React.FC = () => {
         return (
           <AudioMessage 
             src={`https://gateway.irys.xyz/${msg.audio_cid}`} 
-            filename="Audio message" 
             isOwnMessage={!msg.isBot}
           />
         );
@@ -647,7 +637,6 @@ const ChatPage: React.FC = () => {
             // Extract parameters and content from XMTP attachment format
             const { parameters, content: attachmentContent, encodedContent } = parsedContent;
             const mimeType = parameters?.mimeType || 'audio/mpeg';
-            const filename = parameters?.filename || 'Audio message';
             
             // Create audio blob if we have binary content
             if (attachmentContent && attachmentContent instanceof Uint8Array) {
@@ -655,7 +644,6 @@ const ChatPage: React.FC = () => {
               return (
                 <AudioMessage 
                   src={audioUrl} 
-                  filename={filename} 
                   isOwnMessage={!msg.isBot}
                 />
               );
@@ -667,7 +655,6 @@ const ChatPage: React.FC = () => {
               return (
                 <AudioMessage 
                   src={audioUrl} 
-                  filename={filename} 
                   isOwnMessage={!msg.isBot}
                 />
               );
@@ -699,7 +686,6 @@ const ChatPage: React.FC = () => {
               return (
                 <AudioMessage 
                   src={audioUrl} 
-                  filename={parsedContent.filename || 'Audio message'} 
                   isOwnMessage={!msg.isBot}
                 />
               );
@@ -800,14 +786,14 @@ const ChatPage: React.FC = () => {
             <div 
               key={msg.id} 
               className={`flex ${
-                msg.isBot ? 'justify-start' : 'justify-end'
+                !msg.isBot ? 'justify-end' : 'justify-start'
               } mb-4`}
             >
               <div 
                 className={`max-w-[80%] p-3 rounded-lg ${
-                  msg.isBot 
-                    ? 'bg-neutral-800 text-white rounded-tl-none' 
-                    : 'bg-indigo-600 text-white rounded-tr-none'
+                  !msg.isBot 
+                    ? 'bg-indigo-600 text-white rounded-tr-none' 
+                    : 'bg-neutral-800 text-white rounded-tl-none'
                 }`}
               >
                 {renderMessageContent(msg as ChatMessage)}

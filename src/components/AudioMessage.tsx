@@ -68,8 +68,6 @@ const AudioMessage: React.FC<AudioMessageProps> = ({
     <div className={`flex flex-col p-2 rounded-lg max-w-xs ${
       isOwnMessage ? 'bg-blue-500 text-white ml-auto' : 'bg-gray-200 text-gray-800'
     }`}>
-      <div className="text-xs mb-1 opacity-75">{filename}</div>
-      
       <div className="flex items-center space-x-2">
         <button 
           onClick={togglePlay}
