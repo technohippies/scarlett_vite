@@ -1,17 +1,23 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CaretLeft } from '@phosphor-icons/react';
 import { useXmtp } from '../../context/XmtpContext';
 import { useAppKit } from '../../context/ReownContext';
 import ChatInput from '../../components/chat/ChatInput';
 import PageHeader from '../../components/layout/PageHeader';
-import AudioMessage from '../../components/AudioMessage';
 // Import the attachment helper
 import { loadXmtpAttachmentModule } from '../../utils/xmtpAttachmentHelper';
 import { KNOWN_BOT_INBOX_IDS } from '../../utils/botMessageUtils';
-import { inspectClient } from '../../utils/messageInspector';
 import { xmtpMessagingService } from '../../lib/xmtp/messagingService';
-import { ChatMessage } from '../../types/chat';
+import { ChatMessage as BaseChatMessage } from '../../types/chat';
+
+// Extend the ChatMessage type to include additional properties
+interface ExtendedChatMessage extends BaseChatMessage {
+  sending?: boolean;
+  error?: boolean;
+  direction?: 'sent' | 'received';
+  senderInboxId?: string;
+}
 
 // Simple date formatter function with improved error handling
 const formatMessageTime = (timestamp: any) => {
@@ -62,6 +68,9 @@ const formatMessageTime = (timestamp: any) => {
   }
 };
 
+// Type definition for the cleanup function
+type CleanupFunction = () => void;
+
 const ChatPage: React.FC = () => {
   const { t } = useTranslation();
   const xmtp = useXmtp();
@@ -69,10 +78,10 @@ const ChatPage: React.FC = () => {
   
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messageStreamCleanup = useRef<(() => void) | null>(null);
+  const messageStreamCleanup = useRef<CleanupFunction | null>(null);
   
   // State
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<ExtendedChatMessage[]>([]);
   const [botConversation, setBotConversation] = useState<any>(null);
   const [sendStatus, setSendStatus] = useState<string | null>(null);
   const [isReownConnected, setIsReownConnected] = useState<boolean>(false);
@@ -81,16 +90,17 @@ const ChatPage: React.FC = () => {
   const [botInboxId, setBotInboxId] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [isXmtpConnected, setIsXmtpConnected] = useState(false);
   
   // Debug panel component
-  const MessageDebugPanel = ({ message }: { message: any }) => {
+  const MessageDebugPanel = ({ message }: { message: ExtendedChatMessage }) => {
     if (!showDebug) return null;
     
     return (
       <div className="mt-1 p-2 bg-gray-800 rounded text-xs font-mono overflow-x-auto">
         <div><span className="text-blue-400">id:</span> {message.id}</div>
         <div><span className="text-blue-400">sender:</span> {message.sender}</div>
-        <div><span className="text-blue-400">direction:</span> {message.direction}</div>
+        <div><span className="text-blue-400">direction:</span> {message.direction || 'N/A'}</div>
         <div><span className="text-blue-400">isBot:</span> {String(message.isBot)}</div>
         <div><span className="text-blue-400">senderInboxId:</span> {message.senderInboxId || 'N/A'}</div>
         <div><span className="text-blue-400">botInboxId:</span> {botInboxId || 'N/A'}</div>
@@ -175,12 +185,37 @@ const ChatPage: React.FC = () => {
     }
   }, [xmtp?.isConnected]);
   
+  // Effect to load the bot conversation when XMTP is connected
+  useEffect(() => {
+    if (xmtp && xmtp.isConnected && !botConversation) {
+      console.log('XMTP connected, loading bot conversation...');
+      loadBotConversation();
+    }
+  }, [xmtp, xmtp?.isConnected, botConversation]);
+  
+  // Effect to periodically check if the message stream is active
+  useEffect(() => {
+    if (!botConversation) return;
+    
+    // Check every 30 seconds if the message stream is active
+    const intervalId = setInterval(() => {
+      if (botConversation && !messageStreamCleanup.current) {
+        console.warn('⚠️ Message stream is not active. Re-establishing stream...');
+        loadBotConversation();
+      }
+    }, 30000);
+    
+    // Clean up the interval when the component unmounts
+    return () => clearInterval(intervalId);
+  }, [botConversation]);
+  
   // Scroll to bottom when messages change
   useEffect(() => {
     if (messagesEndRef.current) {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
     
+    // Log message updates for debugging
     console.log(`🔄 Chat messages updated, new count: ${chatMessages.length}`);
     
     // Log the last few messages for debugging
@@ -197,88 +232,44 @@ const ChatPage: React.FC = () => {
     }
   }, [chatMessages]);
   
-  // Function to get or create the bot conversation
+  // Load the bot conversation
   const loadBotConversation = async () => {
+    if (!xmtp || !xmtp.client) {
+      console.error('Cannot load bot conversation: XMTP client not initialized');
+      setSendStatus('Please connect to XMTP first');
+      return;
+    }
+    
     try {
-      // Check if we have an XMTP client
-      if (!xmtp || !xmtp.client) {
-        console.error('Cannot load bot conversation: No XMTP client');
-        setSendStatus('Error: Please connect to XMTP first');
-        return;
-      }
+      setSendStatus('Connecting to bot...');
       
-      // Get the XMTP client for logging
-      const xmtpClient = xmtp.client as any;
-      console.log('Loading bot conversation with XMTP client:', xmtpClient);
-      
-      // Get or create a conversation with the bot
-      console.log('Creating or loading conversation with bot...');
-      let conversation;
-      try {
-        // Try to create a new conversation with the bot
-        conversation = await xmtp.createBotConversation();
-        console.log('Bot conversation created or loaded:', conversation);
-      } catch (error) {
-        console.error('Error creating bot conversation:', error);
-        setSendStatus('Error connecting to bot. Please try again.');
-        return;
-      }
-      
-      // Store our wallet address for comparison
-      let ourWalletAddress = null;
-      let ourInboxId = null;
-      let botInboxId = null;
-      
-      // Get our wallet address from the client
-      if (xmtpClient.address) {
-        ourWalletAddress = xmtpClient.address;
-        console.log('Our wallet address:', ourWalletAddress);
-      }
+      // Get the wallet address from the XMTP client
+      const ourWalletAddress = (xmtp.client as any).address;
+      console.log(`Our wallet address: ${ourWalletAddress}`);
       
       // Get our inbox ID from the client
-      if (xmtpClient.inboxId) {
-        ourInboxId = xmtpClient.inboxId;
-        console.log('Our inbox ID:', ourInboxId);
+      const ourInboxId = xmtp.client.inboxId || '';
+      console.log(`Our inbox ID: ${ourInboxId}`);
+      
+      // Use a known bot inbox ID
+      const botInboxId = KNOWN_BOT_INBOX_IDS[0];
+      console.log(`Using bot inbox ID: ${botInboxId}`);
+      
+      // Create a conversation with the bot
+      console.log('Creating conversation with bot...');
+      const conversation = await xmtp.createBotConversation();
+      
+      if (!conversation) {
+        console.error('Failed to create bot conversation');
+        setSendStatus('Error: Failed to create bot conversation');
+        return;
       }
       
-      // Get bot details from conversation
-      if (conversation.peerInboxId) {
-        botInboxId = conversation.peerInboxId;
-        console.log('Bot inbox ID:', botInboxId);
-      } else if (conversation.peerAddress) {
-        // Use peerAddress as fallback for botInboxId
-        botInboxId = conversation.peerAddress;
-        console.log('Using bot peer address as ID:', botInboxId);
-      } else {
-        // Try to get the bot inbox ID using the dmPeerInboxId method if available
-        try {
-          if (typeof conversation.dmPeerInboxId === 'function') {
-            const peerInboxId = await conversation.dmPeerInboxId();
-            if (peerInboxId) {
-              botInboxId = peerInboxId;
-              console.log('Got bot inbox ID from dmPeerInboxId method:', botInboxId);
-            }
-          }
-        } catch (error) {
-          console.error('Error getting dmPeerInboxId:', error);
-        }
-        
-        // If still no bot inbox ID, check for known bot IDs
-        if (!botInboxId && KNOWN_BOT_INBOX_IDS.length > 0) {
-          botInboxId = KNOWN_BOT_INBOX_IDS[0];
-          console.log('Using known bot inbox ID from constants:', botInboxId);
-        }
-      }
-      
-      // Log conversation details for debugging
-      console.log('Conversation details:', {
-        id: conversation.id,
+      console.log('Bot conversation created successfully:', {
+        id: conversation.id || conversation.topic,
         topic: conversation.topic,
         peerAddress: conversation.peerAddress,
-        peerInboxId: conversation.peerInboxId,
-        ourWalletAddress: ourWalletAddress,
-        ourInboxId: ourInboxId,
-        botInboxId: botInboxId
+        peerInboxId: conversation.peerInboxId
       });
       
       // Store the conversation and IDs for later use
@@ -301,25 +292,30 @@ const ChatPage: React.FC = () => {
         setChatMessages(messages);
         setSendStatus(null);
         
-        // Set up message stream using the messaging service
+        // Set up the message stream
         try {
           console.log('Setting up message stream...');
           
           // Clean up any existing stream
           if (messageStreamCleanup.current) {
             console.log('Cleaning up existing message stream');
-            messageStreamCleanup.current();
+            try {
+              messageStreamCleanup.current();
+            } catch (cleanupError) {
+              console.error('Error cleaning up existing message stream:', cleanupError);
+            }
             messageStreamCleanup.current = null;
           }
           
           // Set up a new stream with the messaging service
+          console.log('Creating new message stream for conversation:', conversation.topic || conversation.id);
           const { cleanup } = await xmtpMessagingService.setupMessageStream(
             conversation,
             {
               ourWalletAddress,
               ourInboxId,
               botInboxId: botInboxId || KNOWN_BOT_INBOX_IDS[0],
-              onMessage: (message: ChatMessage) => {
+              onMessage: (message: ExtendedChatMessage) => {
                 console.log('📥 New message received in onMessage callback:', {
                   id: message.id,
                   sender: message.sender,
@@ -364,15 +360,58 @@ const ChatPage: React.FC = () => {
                     }
                   }, 100);
                   
-                  return [...filtered, message];
+                  // Ensure we're actually adding the new message
+                  const newMessages = [...filtered, message];
+                  console.log(`📊 Updated chat messages count: ${newMessages.length}`);
+                  
+                  // Debug log all messages to verify state
+                  newMessages.forEach((msg, index) => {
+                    console.log(`Message ${index}: ${msg.id} - ${typeof msg.content === 'string' ? msg.content.substring(0, 30) : 'non-string content'}`);
+                  });
+                  
+                  return newMessages;
                 });
               },
               onError: (error) => {
                 console.error('❌ Error in message stream:', error);
+                
+                // Check if this is a worker error (likely XMTP worker)
+                const errorString = String(error);
+                const isWorkerError = errorString.includes('Worker') || 
+                                     errorString.includes('error decoding response body') ||
+                                     errorString.includes('expected `,` or `}`');
+                
+                if (isWorkerError) {
+                  console.log('Detected XMTP worker error, attempting immediate recovery...');
+                  
+                  // Clear the current cleanup function
+                  messageStreamCleanup.current = null;
+                  
+                  // Try to recover from worker errors by re-establishing the stream with a shorter delay
+                  setTimeout(() => {
+                    console.log('🔄 Attempting to recover from worker error by re-establishing stream...');
+                    loadBotConversation();
+                  }, 1000);
+                } else {
+                  // For other errors, use a longer delay
+                  setTimeout(() => {
+                    console.log('🔄 Attempting to recover from stream error by re-establishing stream...');
+                    loadBotConversation();
+                  }, 3000);
+                }
               },
               onClose: () => {
                 console.log('Message stream closed');
                 messageStreamCleanup.current = null;
+                
+                // Try to reconnect if the stream closes unexpectedly
+                console.log('Message stream closed unexpectedly, attempting to reconnect...');
+                setTimeout(() => {
+                  if (!messageStreamCleanup.current) {
+                    console.log('Reconnecting message stream after unexpected close');
+                    loadBotConversation();
+                  }
+                }, 2000);
               }
             }
           );
@@ -380,21 +419,23 @@ const ChatPage: React.FC = () => {
           // Store the cleanup function for later
           messageStreamCleanup.current = cleanup;
           console.log('Message stream setup complete');
-          
-          // Verify the stream is working by sending a test message
-          console.log('Verifying message stream is active...');
-          
-        } catch (error) {
-          console.error('Error setting up message stream:', error);
+        } catch (streamError) {
+          console.error('Error setting up message stream:', streamError);
           setSendStatus('Error setting up message stream. Please try again.');
+          
+          // Try to recover automatically after a delay
+          setTimeout(() => {
+            console.log('Attempting automatic recovery after stream setup error...');
+            loadBotConversation();
+          }, 5000);
         }
-      } catch (error) {
-        console.error('Error loading messages:', error);
+      } catch (loadError) {
+        console.error('Error loading messages:', loadError);
         setSendStatus('Error loading messages. Please try again.');
       }
     } catch (error) {
-      console.error('Error in loadBotConversation:', error);
-      setSendStatus('Error loading bot conversation. Please try again.');
+      console.error('Error loading bot conversation:', error);
+      setSendStatus('Error connecting to bot. Please try again.');
     }
   };
   
@@ -411,7 +452,7 @@ const ChatPage: React.FC = () => {
       console.log(`📤 Preparing to send message to bot: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`);
       
       // Create a temporary message to show in the UI
-      const tempMessage = {
+      const tempMessage: ExtendedChatMessage = {
         id: `temp-${Date.now()}`,
         content: messageText,
         sender: 'user', // This is a user message, not a bot message
@@ -440,6 +481,12 @@ const ChatPage: React.FC = () => {
           messageStreamCleanup: messageStreamCleanup.current ? 'exists' : 'missing',
           chatMessagesCount: chatMessages.length
         });
+        
+        // Verify the message stream is active
+        if (!messageStreamCleanup.current) {
+          console.warn('⚠️ Message stream is not active after sending message. Re-establishing stream...');
+          await loadBotConversation();
+        }
         
         // The real message will be added when it comes back through the stream
         // We can remove the temporary message once we know it's sent
@@ -498,7 +545,7 @@ const ChatPage: React.FC = () => {
       }
       
       // Create a temporary user message to add to the UI immediately
-      const tempMessage: ChatMessage = {
+      const tempMessage: ExtendedChatMessage = {
         id: `temp-audio-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
         content: 'Audio message',
         sender: 'user',
@@ -568,41 +615,41 @@ const ChatPage: React.FC = () => {
     }
   };
   
-  
-  // Connect to Reown only (first step)
+  // Connect to Reown explicitly (first step)
   const handleConnectReown = async () => {
-    console.log('Connecting to Reown...');
-    setSendStatus('Connecting to Reown...');
-    
     try {
-      // Use the appKit instance that was already obtained at the component level
-      if (!appKit || !appKit.connectWallet) {
-        throw new Error('AppKit not initialized or connectWallet not available');
+      console.log('Connecting to Reown...');
+      setSendStatus('Connecting to Reown...');
+      
+      if (!appKit) {
+        console.error('AppKit context is not available');
+        setSendStatus('Error: AppKit context is not available');
+        return;
       }
       
-      // Call the connectWallet function from our context
+      // Connect to Reown using the connectWallet method
       const signer = await appKit.connectWallet();
       
-      if (!signer) {
-        throw new Error('Failed to connect to Reown');
+      if (signer) {
+        console.log('Connected to Reown successfully');
+        setIsReownConnected(true);
+        setReownSigner(signer);
+        setSendStatus('Connected to Reown. Now connect to XMTP.');
+      } else {
+        console.error('Failed to get signer from Reown');
+        setSendStatus('Error: Failed to connect to Reown');
       }
-      
-      console.log('Successfully connected to Reown');
-      setIsReownConnected(true);
-      setReownSigner(signer);
-      return signer;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error connecting to Reown:', error);
-      setSendStatus('Error connecting to Reown');
-      return null;
+      setSendStatus(`Error connecting to Reown: ${error.message || 'Unknown error'}`);
     }
   };
   
   // Connect to XMTP explicitly (second step)
   const handleConnectXmtp = async () => {
-    if (!isReownConnected || !reownSigner) {
-      console.error('Cannot connect to XMTP: Not connected to Reown');
-      setSendStatus('Error: Please connect to Reown first');
+    if (!appKit || !appKit.ethersSigner) {
+      console.error('Cannot connect to XMTP: No signer available');
+      setSendStatus('Error: Please connect to Reown first to get a signer');
       return;
     }
     
@@ -613,101 +660,29 @@ const ChatPage: React.FC = () => {
     }
     
     try {
-      console.log('Connecting to XMTP with signer:', reownSigner);
+      console.log('Connecting to XMTP with signer:', appKit.ethersSigner);
       
-      // Try the direct Ethers approach first
-      if (xmtp.connectWithEthers) {
-        console.log('Using connectWithEthers method');
-        const success = await xmtp.connectWithEthers();
-        
-        if (!success) {
-          console.log('connectWithEthers failed, falling back to connectXmtp');
-          // Fall back to the regular connect method
-          await xmtp.connectXmtp(reownSigner);
-        }
-      } else {
-        // Use the connectXmtp method which is available on the context
-        await xmtp.connectXmtp(reownSigner);
+      // Try to connect with ethers first
+      console.log('Using connectWithEthers method');
+      const success = await xmtp.connectWithEthers();
+      
+      if (!success) {
+        console.log('connectWithEthers failed, falling back to connectXmtp');
+        await xmtp.connectXmtp(appKit.ethersSigner);
       }
       
-      // Check if we're connected
-      if (xmtp.client) {
-        console.log('Connected to XMTP!');
-        
-        // Get our wallet address for logging - use type assertion
-        // The XMTP Client type doesn't expose address directly in TypeScript
-        // but it is available at runtime
-        const xmtpClient = xmtp.client as any;
-        let walletAddress = '';
-        
-        try {
-          walletAddress = await xmtpClient.address;
-          console.log('Connected with wallet address:', walletAddress);
-        } catch (error) {
-          console.warn('Could not get wallet address from XMTP client:', error);
-        }
-        
-        // Load or create conversation with the bot
-        await loadBotConversation();
-      } else {
-        console.error('Failed to connect to XMTP: No client after connect');
-        setSendStatus('Error: Failed to connect to XMTP');
-      }
+      setIsXmtpConnected(true);
+      
+      // Load the bot conversation after connecting
+      await loadBotConversation();
     } catch (error) {
       console.error('Error connecting to XMTP:', error);
       setSendStatus('Error: Error connecting to XMTP');
     }
   };
   
-  // Add a function to check if a message is an audio attachment
-  const isAudioAttachment = (content: any): boolean => {
-    try {
-      // For XMTP attachment format with specific structure
-      if (content && content.type && 
-          (content.type.authorityId === 'xmtp.org' && 
-           content.type.typeId === 'attachment')) {
-        // Check if the attachment is audio based on mimeType in parameters
-        if (content.parameters && content.parameters.mimeType && 
-            content.parameters.mimeType.startsWith('audio/')) {
-          return true;
-        }
-        
-        // Check filename for audio extensions as fallback
-        if (content.parameters && content.parameters.filename) {
-          const filename = content.parameters.filename.toLowerCase();
-          return filename.endsWith('.mp3') || 
-                 filename.endsWith('.wav') || 
-                 filename.endsWith('.ogg') || 
-                 filename.endsWith('.m4a');
-        }
-      }
-      
-      // Traditional attachment format (simple object with mimeType)
-      if (typeof content === 'string') {
-        try {
-          const parsedContent = JSON.parse(content);
-          return (
-            parsedContent &&
-            parsedContent.mimeType &&
-            parsedContent.mimeType.startsWith('audio/')
-          );
-        } catch {
-          return false;
-        }
-      }
-      
-      // Direct object with mimeType
-      return content && 
-             content.mimeType && 
-             content.mimeType.startsWith('audio/');
-    } catch (e) {
-      console.error('Error in isAudioAttachment:', e);
-      return false;
-    }
-  };
-
   // Function to render message content based on type
-  const renderMessageContent = (message: ChatMessage) => {
+  const renderMessageContent = (message: ExtendedChatMessage) => {
     // Handle null or undefined content
     if (!message.content) {
       console.log(`⚠️ Message ${message.id} has null or undefined content`);
@@ -728,90 +703,140 @@ const ChatPage: React.FC = () => {
     if (typeof message.content === 'object') {
       console.log(`🔍 Message ${message.id} has object content`);
       
-      // Use type assertion to access properties safely
-      const content = message.content as any;
-      
-      // Check if this is an XMTP attachment
-      if (content.type && 
-          content.type.authorityId === 'xmtp.org' && 
-          content.type.typeId === 'attachment') {
+      try {
+        // Use type assertion to access properties safely
+        const content = message.content as any;
         
-        console.log(`🎵 Message ${message.id} is an audio attachment`);
-        
-        try {
-          // Try to create a blob from the binary content
-          if (content.content) {
-            console.log(`Creating audio blob from binary content for message ${message.id}`);
-            const blob = new Blob([content.content], { type: 'audio/mpeg' });
-            const url = URL.createObjectURL(blob);
-            
-            return (
-              <div className="audio-player-container">
-                <audio controls src={url} className="w-full" />
-              </div>
-            );
-          }
+        // Check if this is an XMTP attachment
+        if (content && content.type && 
+            typeof content.type === 'object' &&
+            content.type.authorityId === 'xmtp.org' && 
+            content.type.typeId === 'attachment') {
           
-          // If no binary content, try to use encoded content
-          if (content.encodedContent) {
-            console.log(`Creating audio blob from encoded content for message ${message.id}`);
-            const binary = atob(content.encodedContent);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) {
-              bytes[i] = binary.charCodeAt(i);
+          console.log(`🎵 Message ${message.id} is an audio attachment`);
+          
+          try {
+            // Try to create a blob from the binary content
+            if (content.content && (content.content instanceof Uint8Array || Array.isArray(content.content))) {
+              console.log(`Creating audio blob from binary content for message ${message.id}`);
+              
+              // Safely create a blob from the binary content
+              try {
+                const blob = new Blob([content.content], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+                
+                return (
+                  <div className="audio-player-container">
+                    <audio controls src={url} className="w-full" />
+                  </div>
+                );
+              } catch (blobError) {
+                console.error(`❌ Error creating blob for message ${message.id}:`, blobError);
+                return <span className="text-gray-400 italic">Error creating audio player</span>;
+              }
             }
             
-            const blob = new Blob([bytes], { type: 'audio/mpeg' });
-            const url = URL.createObjectURL(blob);
+            // If no binary content, try to use encoded content
+            if (content.encodedContent && typeof content.encodedContent === 'string') {
+              console.log(`Creating audio blob from encoded content for message ${message.id}`);
+              
+              try {
+                const binary = atob(content.encodedContent);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                  bytes[i] = binary.charCodeAt(i);
+                }
+                
+                const blob = new Blob([bytes], { type: 'audio/mpeg' });
+                const url = URL.createObjectURL(blob);
+                
+                return (
+                  <div className="audio-player-container">
+                    <audio controls src={url} className="w-full" />
+                  </div>
+                );
+              } catch (decodeError) {
+                console.error(`❌ Error decoding encoded content for message ${message.id}:`, decodeError);
+                return <span className="text-gray-400 italic">Error decoding audio content</span>;
+              }
+            }
             
-            return (
-              <div className="audio-player-container">
-                <audio controls src={url} className="w-full" />
-              </div>
-            );
+            console.log(`⚠️ Audio attachment ${message.id} has no content or encodedContent`);
+            return <span className="text-gray-400 italic">Audio attachment (unable to play)</span>;
+          } catch (audioError) {
+            console.error(`❌ Error processing audio attachment ${message.id}:`, audioError);
+            return <span className="text-gray-400 italic">Error processing audio attachment</span>;
           }
-          
-          console.log(`⚠️ Audio attachment ${message.id} has no content or encodedContent`);
-          return <span className="text-gray-400 italic">Audio attachment (unable to play)</span>;
-        } catch (error) {
-          console.error(`❌ Error rendering audio attachment ${message.id}:`, error);
-          return <span className="text-gray-400 italic">Error playing audio</span>;
         }
+        
+        // For other object types, safely stringify
+        try {
+          // Use a replacer function to handle circular references and binary data
+          const safeReplacer = (_key: string, value: any) => {
+            if (value instanceof Uint8Array) {
+              return `[Binary data (${value.length} bytes)]`;
+            }
+            if (typeof value === 'bigint') {
+              return value.toString();
+            }
+            return value;
+          };
+          
+          const stringified = JSON.stringify(message.content, safeReplacer, 2);
+          return <pre className="text-sm whitespace-pre-wrap">{stringified}</pre>;
+        } catch (stringifyError) {
+          console.error(`❌ Error stringifying object content for message ${message.id}:`, stringifyError);
+          return <span className="text-gray-400 italic">[Complex object - cannot display]</span>;
+        }
+      } catch (error) {
+        console.error(`❌ Error processing object content for message ${message.id}:`, error);
+        return <span className="text-gray-400 italic">Error displaying message content</span>;
       }
-      
-      // For other object types, stringify
-      return <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(message.content, null, 2)}</pre>;
     }
     
     // For string content, render as text
     if (typeof message.content === 'string') {
       // Check if it's JSON
       try {
-        const parsed = JSON.parse(message.content);
-        console.log(`📄 Message ${message.id} contains JSON:`, parsed);
-        
-        // If it has a specific structure we recognize, render accordingly
-        if (parsed.type === 'question' && parsed.options) {
-          // Render question UI - using simple text for now
-          return (
-            <div className="question-container">
-              <p className="font-medium">{parsed.question}</p>
-              <div className="options-list mt-2">
-                {parsed.options.map((option: string, index: number) => (
-                  <div key={index} className="option p-2 border rounded mb-1 cursor-pointer hover:bg-gray-100">
-                    {option}
+        // First check if it starts with { or [ to avoid unnecessary parsing attempts
+        if ((message.content.trim().startsWith('{') && message.content.trim().endsWith('}')) || 
+            (message.content.trim().startsWith('[') && message.content.trim().endsWith(']'))) {
+          
+          try {
+            const parsed = JSON.parse(message.content);
+            console.log(`📄 Message ${message.id} contains JSON:`, parsed);
+            
+            // If it has a specific structure we recognize, render accordingly
+            if (parsed.type === 'question' && parsed.options) {
+              // Render question UI - using simple text for now
+              return (
+                <div className="question-container">
+                  <p className="font-medium">{parsed.question}</p>
+                  <div className="options-list mt-2">
+                    {parsed.options.map((option: string, index: number) => (
+                      <div key={index} className="option p-2 border rounded mb-1 cursor-pointer hover:bg-gray-100">
+                        {option}
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </div>
-          );
+                </div>
+              );
+            }
+            
+            // Otherwise, render as formatted JSON
+            return <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(parsed, null, 2)}</pre>;
+          } catch (parseError) {
+            console.log(`📝 Message ${message.id} contains text that looks like JSON but failed to parse:`, parseError);
+            return <span className="whitespace-pre-wrap">{message.content}</span>;
+          }
         }
         
-        // Otherwise, render as formatted JSON
-        return <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(parsed, null, 2)}</pre>;
-      } catch (e) {
-        // Not JSON, render as plain text
+        // Not JSON-like, render as plain text
         console.log(`📝 Message ${message.id} contains plain text`);
+        return <span className="whitespace-pre-wrap">{message.content}</span>;
+      } catch (e) {
+        // JSON parsing error, render as plain text
+        console.log(`📝 Message ${message.id} contains plain text (JSON parse failed)`);
         return <span className="whitespace-pre-wrap">{message.content}</span>;
       }
     }
@@ -832,6 +857,32 @@ const ChatPage: React.FC = () => {
     };
   }, []);
   
+  if (!isReownConnected) {
+    return (
+      <div className="container mx-auto px-4 py-6">
+        {/* Page header with back button */}
+        <PageHeader
+          leftIcon={<CaretLeft size={24} />}
+          leftLink="/"
+          title={t('chat.title')}
+        />
+        
+        <div className="mt-8 text-center">
+          <p className="text-lg mb-4">Connect to Reown to start chatting</p>
+          <button
+            onClick={handleConnectReown}
+            className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded"
+          >
+            Connect to Reown
+          </button>
+          {sendStatus && (
+            <p className="mt-4 text-sm text-gray-600">{sendStatus}</p>
+          )}
+        </div>
+      </div>
+    );
+  }
+  
   if (!xmtp?.isConnected) {
     return (
       <div className="container mx-auto px-4 py-6">
@@ -840,58 +891,18 @@ const ChatPage: React.FC = () => {
           leftIcon={<CaretLeft size={24} />}
           leftLink="/"
           title={t('chat.title')}
-          // Gear icon for settings page will be implemented later
-          // rightIcon={<Gear size={24} />}
         />
         
-        <div className="bg-neutral-800 rounded-lg shadow-md border border-neutral-700 p-8 max-w-md w-full text-center mx-auto">
-          <h2 className="text-xl font-bold mb-4">{t('chat.connectXmtp')}</h2>
-          <p className="text-neutral-300 mb-6">
-            {t('chat.connectXmtpDescription')}
-          </p>
-          
-          {!isReownConnected ? (
-            <button 
-              onClick={handleConnectReown}
-              className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium w-full mb-4"
-            >
-              Step 1: Connect Wallet with Reown
-            </button>
-          ) : (
-            <>
-              <div className="flex items-center justify-center mb-4 text-green-500">
-                <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-                <span>Wallet Connected</span>
-              </div>
-              
-              <button 
-                onClick={handleConnectXmtp}
-                className="bg-indigo-600 text-white px-6 py-3 rounded-lg font-medium w-full"
-              >
-                Step 2: Connect to XMTP Messaging
-              </button>
-            </>
-          )}
-          
+        <div className="mt-8 text-center">
+          <p className="text-lg mb-4">Connect to XMTP to start chatting</p>
+          <button
+            onClick={handleConnectXmtp}
+            className="bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded"
+          >
+            Connect to XMTP
+          </button>
           {sendStatus && (
-            <div className={`p-2 rounded flex items-center ${
-              sendStatus.includes('Error') 
-                ? 'bg-red-900/20 text-red-400' 
-                : sendStatus.includes('Sending') 
-                  ? 'bg-blue-900/20 text-blue-400' 
-                  : 'bg-green-900/20 text-green-400'
-            }`}>
-              {sendStatus.includes('Sending') && (
-                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current rounded-full border-t-transparent"></div>
-              )}
-              {sendStatus.includes('Error') && (
-                <span className="mr-2">⚠️</span>
-              )}
-              {sendStatus.includes('sent') && (
-                <span className="mr-2">✓</span>
-              )}
-              {sendStatus}
-            </div>
+            <p className="mt-4 text-sm text-gray-600">{sendStatus}</p>
           )}
         </div>
       </div>
@@ -899,69 +910,65 @@ const ChatPage: React.FC = () => {
   }
   
   return (
-    <div className="container mx-auto px-4 py-6 flex flex-col h-full">
+    <div className="container mx-auto px-4 py-6 flex flex-col h-screen">
       {/* Page header with back button */}
       <PageHeader
         leftIcon={<CaretLeft size={24} />}
         leftLink="/"
         title={t('chat.title')}
-        // Gear icon for settings page will be implemented later
-        // rightIcon={<Gear size={24} />}
+        rightIcon={
+          <button 
+            onClick={() => setShowDebug(!showDebug)} 
+            className="text-xs text-gray-500 hover:text-gray-700"
+          >
+            {showDebug ? 'Hide Debug' : 'Debug'}
+          </button>
+        }
       />
       
-      {/* Chat container */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Messages container */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
-          {chatMessages.map(msg => {
-            // Determine if this is a bot message by checking the isBot flag
-            // This should be correctly set by the messagingService.isMessageFromBot function
-            const isBotMessage = msg.isBot === true;
-            
-            return (
-              <div 
-                key={msg.id} 
-                className={`flex ${
-                  isBotMessage ? 'justify-start' : 'justify-end'
-                } mb-4`}
-              >
-                <div 
-                  className={`max-w-[80%] p-3 rounded-lg ${
-                    isBotMessage 
-                      ? 'bg-neutral-800 text-white rounded-tl-none' 
-                      : 'bg-indigo-600 text-white rounded-tr-none'
-                  }`}
-                >
-                  {renderMessageContent(msg)}
-                  <div className="flex items-center justify-between mt-1">
-                    <p className="text-xs opacity-70">
-                      {formatMessageTime(msg.timestamp)}
-                    </p>
-                    {(msg as any).sending && (
-                      <div className="animate-spin ml-2 h-3 w-3 border-2 border-current rounded-full border-t-transparent opacity-70"></div>
-                    )}
-                    {(msg as any).error && (
-                      <span className="ml-2 text-red-400 text-xs">⚠️</span>
-                    )}
-                  </div>
-                </div>
-                <MessageDebugPanel message={msg} />
+      {/* Chat messages */}
+      <div className="flex-1 overflow-y-auto py-4 space-y-4">
+        {chatMessages.map((message) => (
+          <div 
+            key={message.id} 
+            className={`flex ${message.isBot ? 'justify-start' : 'justify-end'}`}
+          >
+            <div 
+              className={`max-w-[80%] p-3 rounded-lg ${
+                message.isBot 
+                  ? 'bg-gray-100 text-gray-900' 
+                  : 'bg-blue-500 text-white'
+              } ${message.sending ? 'opacity-70' : ''}`}
+            >
+              {renderMessageContent(message)}
+              <div className="text-xs mt-1 opacity-70">
+                {formatMessageTime(message.timestamp)}
+                {message.sending && ' (sending...)'}
               </div>
-            );
-          })}
-          
-          <div ref={messagesEndRef} />
-        </div>
-        
-        {/* Chat input */}
-        <div className="border-t border-neutral-700 bg-neutral-900">
-          <ChatInput 
-            onSendMessage={sendMessageToBot} 
-            onSendAudio={sendAudioAttachment}
-            placeholder={t('chat.placeholder')}
-            disabled={isSendingMessage}
-          />
-        </div>
+              <MessageDebugPanel message={message} />
+            </div>
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+      
+      {/* Chat input */}
+      <div className="py-4 border-t">
+        <ChatInput 
+          onSendMessage={sendMessageToBot} 
+          onSendAudio={sendAudioAttachment}
+          disabled={isSendingMessage || !botConversation}
+          placeholder={
+            !botConversation 
+              ? 'Connecting to bot...' 
+              : isSendingMessage 
+                ? 'Sending...' 
+                : 'Type a message...'
+          }
+        />
+        {sendStatus && (
+          <div className="text-sm text-gray-500 mt-2">{sendStatus}</div>
+        )}
       </div>
     </div>
   );

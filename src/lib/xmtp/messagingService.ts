@@ -7,7 +7,7 @@
  */
 
 import { inspectMessage, inspectConversation } from '../../utils/messageInspector';
-import { isBotMessage, KNOWN_BOT_INBOX_IDS } from '../../utils/botMessageUtils';
+import { KNOWN_BOT_INBOX_IDS } from '../../utils/botMessageUtils';
 import { ChatMessage } from '../../types/chat';
 
 /**
@@ -184,24 +184,67 @@ export class XmtpMessagingService {
     options: MessageStreamOptions & MessageProcessingOptions = {}
   ): Promise<{ stream: any; cleanup: () => void }> {
     if (!conversation) {
-      throw new Error('Cannot set up message stream: No conversation provided');
+      throw new Error('No conversation provided to setupMessageStream');
     }
-
+    
     try {
-      this.logger.log('Setting up message stream for conversation:', conversation.id || conversation.topic);
+      this.logger.log(`Starting message stream for conversation: ${conversation.topic || conversation.id}`);
       
-      // Inspect the conversation to understand its structure
-      inspectConversation(conversation, 'Setting up stream for conversation');
+      // Check if conversation has the stream method (new API) or streamMessages method (old API)
+      if (typeof conversation.stream === 'function') {
+        this.logger.log('Using conversation.stream() method (new API)');
+        return this.setupStreamWithNewApi(conversation, options);
+      } else if (typeof conversation.streamMessages === 'function') {
+        this.logger.log('Using conversation.streamMessages() method (old API)');
+        return this.setupStreamWithOldApi(conversation, options);
+      } else {
+        this.logger.error('Conversation object does not have stream or streamMessages method:', conversation);
+        throw new Error('Invalid conversation object: missing stream/streamMessages method');
+      }
+    } catch (error) {
+      this.logger.error('Error setting up message stream:', error);
       
-      // Store a reference to the conversation ID for cleanup
-      const conversationId = conversation.id || conversation.topic;
+      // If there's an onError callback, call it
+      if (options.onError) {
+        options.onError(error);
+      }
       
-      // Define the message handler that will process incoming messages
-      const onMessage = async (error: Error | null, msg: XmtpRawMessage) => {
+      // Return a dummy stream and cleanup function that will trigger reconnection
+      return {
+        stream: null,
+        cleanup: () => {
+          this.logger.log('Dummy cleanup called for failed stream');
+          if (options.onClose) {
+            options.onClose();
+          }
+        }
+      };
+    }
+  }
+
+  /**
+   * Set up a message stream using the new API (conversation.stream())
+   */
+  private async setupStreamWithNewApi(
+    conversation: any,
+    options: MessageStreamOptions & MessageProcessingOptions = {}
+  ): Promise<{ stream: any; cleanup: () => void }> {
+    let stream: any = null;
+    const streamKey = `${conversation.topic || conversation.id}-${Date.now()}`;
+    
+    try {
+      this.logger.log('Creating stream with conversation.stream() method...');
+      
+      // Create the stream with callback handler
+      stream = conversation.stream(async (error: Error | null, msg: XmtpRawMessage) => {
         if (error) {
           this.logger.error('Error in message stream:', error);
           if (options.onError) {
-            options.onError(error);
+            try {
+              options.onError(error);
+            } catch (callbackError) {
+              this.logger.error('Error in onError callback:', callbackError);
+            }
           }
           return;
         }
@@ -214,126 +257,432 @@ export class XmtpMessagingService {
         this.logger.log('🔄 New message received from stream:', msg.id);
         
         try {
-          // Inspect the message to understand its structure
-          inspectMessage(msg, 'Stream Message');
-          
-          // Determine if message is from bot
-          const isFromBot = this.isMessageFromBot(msg, options);
-          this.logger.log(`Stream message ${msg.id} isFromBot determination: ${isFromBot}`, {
-            senderAddress: msg.senderAddress,
-            senderInboxId: msg.senderInboxId,
-            ourWalletAddress: options.ourWalletAddress,
-            ourInboxId: options.ourInboxId,
-            botInboxId: options.botInboxId
-          });
-          
-          // Handle content that might be a Promise
-          let resolvedContent = msg.content;
-          if (resolvedContent instanceof Promise) {
+          // Process the message
+          await this.processStreamMessage(msg, options);
+        } catch (processingError) {
+          this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
+          if (options.onError) {
             try {
-              this.logger.log(`Stream message ${msg.id} content is a Promise, resolving...`);
-              resolvedContent = await resolvedContent;
-              this.logger.log(`Stream message ${msg.id} content resolved:`, 
-                typeof resolvedContent === 'string' ? resolvedContent : 'non-string content');
-            } catch (contentError) {
-              this.logger.error('Error resolving stream message content:', contentError);
-              resolvedContent = 'Error: Could not load message content';
+              options.onError(processingError);
+            } catch (callbackError) {
+              this.logger.error('Error in onError callback:', callbackError);
             }
           }
-
-          // Check if this is an attachment (especially audio)
-          const isAttachment = resolvedContent && 
-                              typeof resolvedContent === 'object' && 
-                              resolvedContent.type && 
-                              resolvedContent.type.authorityId === 'xmtp.org' && 
-                              resolvedContent.type.typeId === 'attachment';
-          
-          if (isAttachment) {
-            this.logger.log(`Message ${msg.id} is an attachment`);
-          }
-
-          // Create a standardized message object
-          const processedMessage: ChatMessage = {
-            id: msg.id,
-            // For attachments, preserve the original structure instead of stringifying
-            content: isAttachment ? resolvedContent : 
-                    (typeof resolvedContent === 'string' ? resolvedContent : JSON.stringify(resolvedContent)),
-            sender: msg.senderAddress || msg.senderInboxId || 'unknown',
-            timestamp: msg.sent instanceof Date ? msg.sent : new Date(msg.sentAtNs ? Number(msg.sentAtNs / BigInt(1000000)) : Date.now()),
-            isBot: isFromBot,
-            senderInboxId: msg.senderInboxId, // Add this for debugging
-            ...(options.includeRawMessage ? { rawMessage: msg } : {})
-          };
-          
-          this.logger.log(`✅ Processed message ${msg.id} ready for UI:`, {
-            id: processedMessage.id,
-            sender: processedMessage.sender,
-            isBot: processedMessage.isBot,
-            contentType: typeof processedMessage.content,
-            timestamp: processedMessage.timestamp
-          });
-          
-          // Call the onMessage callback if provided
-          if (options.onMessage) {
-            this.logger.log(`📤 Calling onMessage callback for message ${msg.id}`);
-            options.onMessage(processedMessage);
-          } else {
-            this.logger.warn(`⚠️ No onMessage callback provided for message ${msg.id}`);
-          }
-        } catch (error) {
-          this.logger.error('Error processing stream message:', error);
         }
-      };
+      });
       
-      // Set up the stream using the conversation.stream method
-      this.logger.log(`Starting stream for conversation ${conversationId}`);
-      let stream;
-      try {
-        stream = conversation.stream(onMessage);
-        this.logger.log(`Stream created for conversation ${conversationId}`);
-      } catch (error) {
-        this.logger.error(`Error creating stream for conversation ${conversationId}:`, error);
-        throw error;
-      }
+      // Store the stream reference for cleanup
+      this.activeStreams.set(streamKey, stream);
       
-      // Store the stream reference in case we need to close it later
-      if (conversationId) {
-        this.activeStreams.set(conversationId, stream);
-        this.logger.log(`Stream stored in activeStreams map with key ${conversationId}`);
-      }
+      this.logger.log(`Message stream created successfully for ${conversation.topic || conversation.id}, stored with key ${streamKey}`);
+      
+      // Add a periodic health check for the stream
+      const healthCheckInterval = setInterval(() => {
+        this.logger.log(`Health check for stream ${streamKey}`);
+        if (!this.activeStreams.has(streamKey)) {
+          this.logger.warn(`Stream ${streamKey} no longer in active streams map, clearing health check`);
+          clearInterval(healthCheckInterval);
+        }
+      }, 30000); // Check every 30 seconds
       
       // Define the cleanup function
       const cleanup = () => {
         try {
-          this.logger.log(`Cleaning up stream for conversation ${conversationId}`);
+          this.logger.log(`Cleaning up message stream for ${conversation.topic || conversation.id}`);
           
-          // Close the stream
-          if (stream && typeof stream.close === 'function') {
-            stream.close();
-            this.logger.log(`Stream closed for conversation ${conversationId}`);
+          // Clear the health check interval
+          clearInterval(healthCheckInterval);
+          
+          if (stream && typeof stream.unsubscribe === 'function') {
+            try {
+              stream.unsubscribe();
+              this.logger.log(`Stream unsubscribed for ${conversation.topic || conversation.id}`);
+            } catch (unsubError) {
+              this.logger.error('Error unsubscribing from stream:', unsubError);
+            }
           }
           
           // Remove from active streams
-          if (conversationId) {
-            this.activeStreams.delete(conversationId);
-            this.logger.log(`Stream removed from activeStreams map for key ${conversationId}`);
-          }
+          this.activeStreams.delete(streamKey);
+          this.logger.log(`Removed stream with key ${streamKey} from active streams`);
           
           // Call the onClose callback if provided
           if (options.onClose) {
-            this.logger.log(`Calling onClose callback for conversation ${conversationId}`);
-            options.onClose();
+            try {
+              options.onClose();
+            } catch (closeError) {
+              this.logger.error('Error in onClose callback:', closeError);
+            }
           }
-        } catch (error) {
-          this.logger.error(`Error cleaning up stream for conversation ${conversationId}:`, error);
+        } catch (cleanupError) {
+          this.logger.error('Error cleaning up message stream:', cleanupError);
+          // Still call onClose even if there was an error
+          if (options.onClose) {
+            try {
+              options.onClose();
+            } catch (closeError) {
+              this.logger.error('Error in onClose callback during error handling:', closeError);
+            }
+          }
         }
       };
       
-      this.logger.log(`Message stream setup complete for conversation ${conversationId}`);
       return { stream, cleanup };
     } catch (error) {
-      this.logger.error('Error setting up message stream:', error);
-      throw error;
+      this.logger.error('Error setting up message stream with new API:', error);
+      
+      // Clean up any partially created stream
+      if (stream) {
+        try {
+          if (typeof stream.unsubscribe === 'function') {
+            stream.unsubscribe();
+          }
+          this.activeStreams.delete(streamKey);
+        } catch (cleanupError) {
+          this.logger.error('Error cleaning up partial stream:', cleanupError);
+        }
+      }
+      
+      // If there's an onError callback, call it
+      if (options.onError) {
+        try {
+          options.onError(error);
+        } catch (callbackError) {
+          this.logger.error('Error in onError callback during setup error:', callbackError);
+        }
+      }
+      
+      // Return a dummy stream and cleanup function that will trigger reconnection
+      return {
+        stream: null,
+        cleanup: () => {
+          this.logger.log('Dummy cleanup called for failed stream');
+          if (options.onClose) {
+            try {
+              options.onClose();
+            } catch (closeError) {
+              this.logger.error('Error in onClose callback for dummy cleanup:', closeError);
+            }
+          }
+        }
+      };
+    }
+  }
+
+  /**
+   * Set up a message stream using the old API (conversation.streamMessages())
+   */
+  private async setupStreamWithOldApi(
+    conversation: any,
+    options: MessageStreamOptions & MessageProcessingOptions = {}
+  ): Promise<{ stream: any; cleanup: () => void }> {
+    let stream: any = null;
+    const streamKey = `${conversation.topic || conversation.id}-${Date.now()}`;
+    
+    try {
+      this.logger.log('Calling conversation.streamMessages() to create stream...');
+      stream = await conversation.streamMessages();
+      
+      // Verify the stream was created successfully
+      if (!stream) {
+        this.logger.error('Failed to create message stream - stream is null or undefined');
+        throw new Error('Failed to create message stream');
+      }
+      
+      this.logger.log('Stream created successfully:', stream);
+      
+      // Store the stream reference for cleanup
+      this.activeStreams.set(streamKey, stream);
+      
+      this.logger.log(`Message stream created successfully for ${conversation.topic || conversation.id}, stored with key ${streamKey}`);
+      
+      // Add a periodic health check for the stream
+      const healthCheckInterval = setInterval(() => {
+        this.logger.log(`Health check for stream ${streamKey}`);
+        if (!this.activeStreams.has(streamKey)) {
+          this.logger.warn(`Stream ${streamKey} no longer in active streams map, clearing health check`);
+          clearInterval(healthCheckInterval);
+        }
+      }, 30000); // Check every 30 seconds
+      
+      // Define the message handler
+      const onMessage = async (msg: XmtpRawMessage) => {
+        if (!msg) {
+          this.logger.warn('Received empty message in stream');
+          return;
+        }
+        
+        this.logger.log('🔄 New message received from stream:', msg.id);
+        
+        try {
+          // Process the message
+          await this.processStreamMessage(msg, options);
+        } catch (processingError) {
+          this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
+          if (options.onError) {
+            try {
+              options.onError(processingError);
+            } catch (callbackError) {
+              this.logger.error('Error in onError callback:', callbackError);
+            }
+          }
+        }
+      };
+      
+      // Set up the stream with the message handler
+      this.logger.log('Attaching message handler to stream...');
+      stream.on('message', onMessage);
+      
+      // Add an error handler to the stream
+      stream.on('error', (error: Error) => {
+        this.logger.error(`Error in message stream for ${conversation.topic || conversation.id}:`, error);
+        if (options.onError) {
+          try {
+            options.onError(error);
+          } catch (callbackError) {
+            this.logger.error('Error in onError callback:', callbackError);
+          }
+        }
+      });
+      
+      // Add a close handler to the stream
+      stream.on('close', () => {
+        this.logger.log(`Stream closed for ${conversation.topic || conversation.id}`);
+        
+        // Clear the health check interval
+        clearInterval(healthCheckInterval);
+        
+        // Remove from active streams
+        this.activeStreams.delete(streamKey);
+        
+        if (options.onClose) {
+          try {
+            options.onClose();
+          } catch (closeError) {
+            this.logger.error('Error in onClose callback:', closeError);
+          }
+        }
+      });
+      
+      // Define the cleanup function
+      const cleanup = () => {
+        try {
+          this.logger.log(`Cleaning up message stream for ${conversation.topic || conversation.id}`);
+          
+          // Clear the health check interval
+          clearInterval(healthCheckInterval);
+          
+          if (stream) {
+            try {
+              stream.removeAllListeners();
+              this.logger.log(`Removed all listeners from stream for ${conversation.topic || conversation.id}`);
+            } catch (removeError) {
+              this.logger.error('Error removing listeners from stream:', removeError);
+            }
+            
+            try {
+              stream.close();
+              this.logger.log(`Stream closed for ${conversation.topic || conversation.id}`);
+            } catch (closeError) {
+              this.logger.error('Error closing stream:', closeError);
+            }
+          }
+          
+          // Remove from active streams
+          this.activeStreams.delete(streamKey);
+          this.logger.log(`Removed stream with key ${streamKey} from active streams`);
+          
+          // Call the onClose callback if provided
+          if (options.onClose) {
+            try {
+              options.onClose();
+            } catch (closeError) {
+              this.logger.error('Error in onClose callback:', closeError);
+            }
+          }
+        } catch (cleanupError) {
+          this.logger.error('Error cleaning up message stream:', cleanupError);
+          // Still call onClose even if there was an error
+          if (options.onClose) {
+            try {
+              options.onClose();
+            } catch (closeError) {
+              this.logger.error('Error in onClose callback during error handling:', closeError);
+            }
+          }
+        }
+      };
+      
+      return { stream, cleanup };
+    } catch (error) {
+      this.logger.error('Error setting up message stream with old API:', error);
+      
+      // Clean up any partially created stream
+      if (stream) {
+        try {
+          stream.removeAllListeners();
+          stream.close();
+          this.activeStreams.delete(streamKey);
+        } catch (cleanupError) {
+          this.logger.error('Error cleaning up partial stream:', cleanupError);
+        }
+      }
+      
+      // If there's an onError callback, call it
+      if (options.onError) {
+        try {
+          options.onError(error);
+        } catch (callbackError) {
+          this.logger.error('Error in onError callback during setup error:', callbackError);
+        }
+      }
+      
+      // Return a dummy stream and cleanup function that will trigger reconnection
+      return {
+        stream: null,
+        cleanup: () => {
+          this.logger.log('Dummy cleanup called for failed stream');
+          if (options.onClose) {
+            try {
+              options.onClose();
+            } catch (closeError) {
+              this.logger.error('Error in onClose callback for dummy cleanup:', closeError);
+            }
+          }
+        }
+      };
+    }
+  }
+
+  /**
+   * Process a message received from the stream
+   */
+  private async processStreamMessage(
+    msg: XmtpRawMessage,
+    options: MessageStreamOptions & MessageProcessingOptions = {}
+  ): Promise<void> {
+    try {
+      // Inspect the message to understand its structure
+      inspectMessage(msg, 'Stream Message');
+      
+      // Determine if message is from bot
+      const isFromBot = this.isMessageFromBot(msg, options);
+      this.logger.log(`Stream message ${msg.id} isFromBot determination: ${isFromBot}`, {
+        senderAddress: msg.senderAddress,
+        senderInboxId: msg.senderInboxId,
+        ourWalletAddress: options.ourWalletAddress,
+        ourInboxId: options.ourInboxId,
+        botInboxId: options.botInboxId
+      });
+      
+      // Handle content that might be a Promise
+      let resolvedContent = msg.content;
+      if (resolvedContent instanceof Promise) {
+        try {
+          this.logger.log(`Stream message ${msg.id} content is a Promise, resolving...`);
+          resolvedContent = await resolvedContent;
+          this.logger.log(`Stream message ${msg.id} content resolved:`, 
+            typeof resolvedContent === 'string' ? resolvedContent : 'non-string content');
+        } catch (contentError) {
+          this.logger.error('Error resolving stream message content:', contentError);
+          resolvedContent = 'Error: Could not load message content';
+        }
+      }
+
+      // Check if this is an attachment (especially audio)
+      let isAttachment = false;
+      try {
+        // Check for XMTP.org attachment format
+        const hasXmtpAttachmentType = resolvedContent && 
+                      typeof resolvedContent === 'object' && 
+                      resolvedContent.type && 
+                      resolvedContent.type.authorityId === 'xmtp.org' && 
+                      resolvedContent.type.typeId === 'attachment';
+        
+        // Check for contentType format (alternative format)
+        const hasContentTypeAttachment = resolvedContent && 
+                      typeof resolvedContent === 'object' && 
+                      resolvedContent.contentType && 
+                      resolvedContent.contentType.authorityId === 'xmtp.org' && 
+                      resolvedContent.contentType.typeId === 'attachment';
+        
+        isAttachment = hasXmtpAttachmentType || hasContentTypeAttachment;
+                      
+        if (isAttachment) {
+          this.logger.log(`Message ${msg.id} is an attachment`);
+        }
+      } catch (attachmentError) {
+        this.logger.error(`Error checking if message ${msg.id} is an attachment:`, attachmentError);
+      }
+      
+      // Safely process content for the UI
+      let processedContent: any = resolvedContent;
+      
+      // If it's not an attachment and it's an object, safely stringify it
+      if (!isAttachment && typeof resolvedContent === 'object') {
+        try {
+          // Use a replacer function to handle circular references and binary data
+          const safeReplacer = (key: string, value: any) => {
+            if (value instanceof Uint8Array) {
+              return `[Binary data (${value.length} bytes)]`;
+            }
+            if (typeof value === 'bigint') {
+              return value.toString();
+            }
+            return value;
+          };
+          
+          processedContent = JSON.stringify(resolvedContent, safeReplacer);
+        } catch (stringifyError: any) {
+          this.logger.error(`Error stringifying message ${msg.id} content:`, stringifyError);
+          processedContent = `Error: Could not process message content (${stringifyError.message})`;
+        }
+      }
+
+      // Create a standardized message object
+      const processedMessage: ChatMessage = {
+        id: msg.id,
+        // For attachments, preserve the original structure instead of stringifying
+        content: isAttachment ? resolvedContent : processedContent,
+        sender: msg.senderAddress || msg.senderInboxId || 'unknown',
+        timestamp: msg.sent instanceof Date ? msg.sent : new Date(msg.sentAtNs ? Number(msg.sentAtNs / BigInt(1000000)) : Date.now()),
+        isBot: isFromBot,
+        senderInboxId: msg.senderInboxId, // Add this for debugging
+        ...(options.includeRawMessage ? { rawMessage: msg } : {})
+      };
+      
+      // Log the processed message before calling the callback
+      this.logger.log(`✅ Processed message ${msg.id} ready for UI:`, {
+        id: processedMessage.id,
+        contentType: typeof processedMessage.content,
+        isBot: processedMessage.isBot,
+        sender: processedMessage.sender,
+        timestamp: processedMessage.timestamp
+      });
+      
+      // Call the onMessage callback if provided
+      if (options.onMessage) {
+        this.logger.log(`📤 Calling onMessage callback for message ${msg.id}`);
+        try {
+          options.onMessage(processedMessage);
+        } catch (callbackError) {
+          this.logger.error(`Error in onMessage callback for message ${msg.id}:`, callbackError);
+          // Don't rethrow this error as it would break the stream
+        }
+      } else {
+        this.logger.warn(`⚠️ No onMessage callback provided for message ${msg.id}`);
+      }
+    } catch (processingError) {
+      this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
+      // Don't rethrow the error as it would break the stream
+      // Instead, try to call the onError callback if provided
+      if (options.onError) {
+        try {
+          options.onError(processingError);
+        } catch (callbackError) {
+          this.logger.error('Error in onError callback:', callbackError);
+        }
+      }
     }
   }
 
@@ -345,33 +694,153 @@ export class XmtpMessagingService {
     messageContent: string | object
   ): Promise<any> {
     if (!conversation) {
-      throw new Error('Cannot send message: No conversation provided');
+      throw new Error('No conversation provided to sendMessage');
     }
-
+    
     try {
-      this.logger.log('Sending message to conversation:', conversation.id || conversation.topic);
-      inspectConversation(conversation, 'Sending to Conversation');
+      this.logger.log(`Sending message to conversation: ${conversation.topic || conversation.id}`);
       
-      // Log message content
-      this.logger.log('Message content to send:', 
-        typeof messageContent === 'string' 
-          ? messageContent.substring(0, 100) + (messageContent.length > 100 ? '...' : '') 
-          : 'object content');
+      // Log the message content for debugging
+      if (typeof messageContent === 'string') {
+        this.logger.log(`Message content (string, first 100 chars): ${messageContent.substring(0, 100)}${messageContent.length > 100 ? '...' : ''}`);
+      } else {
+        // Check if it's an attachment
+        const isAttachment = messageContent && 
+                            typeof messageContent === 'object' && 
+                            (messageContent as any).contentType && 
+                            (messageContent as any).contentType.authorityId === 'xmtp.org' && 
+                            (messageContent as any).contentType.typeId === 'attachment';
+                            
+        if (isAttachment) {
+          this.logger.log(`Sending attachment: ${(messageContent as any).filename || 'unnamed attachment'}`);
+        } else {
+          this.logger.log('Sending object message:', messageContent);
+        }
+      }
+      
+      // Inspect the conversation before sending
+      inspectConversation(conversation, 'Before sending message');
+      
+      // Safely prepare the message content
+      let preparedContent = messageContent;
+      
+      // If it's an object but not an attachment with special handling, ensure it can be stringified
+      if (typeof messageContent === 'object' && 
+          !((messageContent as any).contentType && 
+            (messageContent as any).contentType.authorityId === 'xmtp.org')) {
+        try {
+          // Test if it can be stringified
+          JSON.stringify(messageContent);
+        } catch (stringifyError) {
+          this.logger.error('Error stringifying message content:', stringifyError);
+          
+          // Create a safe copy that can be stringified
+          try {
+            const safeReplacer = (key: string, value: any) => {
+              if (value instanceof Uint8Array) {
+                return `[Binary data (${value.length} bytes)]`;
+              }
+              if (typeof value === 'bigint') {
+                return value.toString();
+              }
+              return value;
+            };
+            
+            // Create a safe version that can be stringified
+            const safeContent = JSON.parse(JSON.stringify(messageContent, safeReplacer));
+            preparedContent = safeContent;
+            this.logger.log('Created safe version of message content that can be stringified');
+          } catch (safeError: any) {
+            this.logger.error('Error creating safe message content:', safeError);
+            throw new Error(`Cannot send message: content cannot be properly serialized (${safeError.message})`);
+          }
+        }
+      }
+      
+      // Verify the conversation is valid before sending
+      if (!conversation.send || typeof conversation.send !== 'function') {
+        this.logger.error('Invalid conversation object:', conversation);
+        throw new Error('Cannot send message: conversation object is invalid or missing send method');
+      }
       
       // Send the message
-      const sentMessage = await conversation.send(messageContent);
-      this.logger.log('Message sent successfully:', {
-        id: sentMessage.id,
-        contentType: sentMessage.contentType?.toString() || 'unknown',
-        senderAddress: sentMessage.senderAddress,
-        recipientAddress: sentMessage.recipientAddress,
-        sent: sentMessage.sent
+      this.logger.log('🔄 Calling conversation.send() to send message...');
+      const sentMessage = await conversation.send(preparedContent);
+      
+      // Log what we got back
+      this.logger.log(`✅ Message sent successfully:`, {
+        id: sentMessage?.id,
+        contentType: sentMessage?.contentType?.toString() || (sentMessage?.content ? typeof sentMessage.content : 'unknown'),
+        senderAddress: sentMessage?.senderAddress,
+        recipientAddress: sentMessage?.recipientAddress,
+        sent: sentMessage?.sent
       });
       
-      // Inspect the sent message
-      inspectMessage(sentMessage, 'Sent Message');
+      // Inspect the sent message if it exists
+      if (sentMessage) {
+        inspectMessage(sentMessage, 'Sent message');
+      } else {
+        this.logger.log('No message object returned, but send operation completed');
+      }
       
-      return sentMessage;
+      // Some XMTP implementations don't return a message object but still succeed
+      // So we'll check if we got a string back (which could be a message ID)
+      if (typeof sentMessage === 'string') {
+        this.logger.log(`📨 Message sent successfully with ID: ${sentMessage}`);
+        return { id: sentMessage, content: messageContent };
+      }
+      
+      // If we got something that looks like a message ID in any form, consider it successful
+      if (sentMessage && typeof sentMessage === 'object') {
+        // If it has an ID property, it's probably a valid message
+        if (sentMessage.id) {
+          this.logger.log(`📨 Message ${sentMessage.id} sent successfully and should appear in stream`);
+          return sentMessage;
+        }
+        
+        // Check if any property looks like a message ID (64 character hex string)
+        for (const key in sentMessage) {
+          const value = sentMessage[key];
+          if (typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)) {
+            this.logger.log(`📨 Found potential message ID in response: ${value}`);
+            return { ...sentMessage, id: value, content: messageContent };
+          }
+        }
+        
+        // If the object itself is an array or has array-like properties that look like a hex string
+        if (Array.isArray(sentMessage) || sentMessage.length) {
+          const hexChars = '0123456789abcdef';
+          let isHexString = true;
+          let hexString = '';
+          
+          // Try to convert array-like object to hex string
+          for (let i = 0; i < sentMessage.length; i++) {
+            const char = String(sentMessage[i]).toLowerCase();
+            if (hexChars.includes(char)) {
+              hexString += char;
+            } else {
+              isHexString = false;
+              break;
+            }
+          }
+          
+          if (isHexString && hexString.length === 64) {
+            this.logger.log(`📨 Converted array-like response to message ID: ${hexString}`);
+            return { id: hexString, content: messageContent };
+          }
+        }
+      }
+      
+      // If we got here, we don't have a clear message ID, but the send didn't throw an error
+      // So we'll create a synthetic message ID and consider it successful
+      const syntheticId = `synthetic-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+      this.logger.log(`📨 Message sent but no clear ID returned. Using synthetic ID: ${syntheticId}`);
+      return { 
+        id: syntheticId, 
+        content: messageContent,
+        synthetic: true,
+        originalResponse: sentMessage
+      };
     } catch (error) {
       this.logger.error('Error sending message:', error);
       throw error;
