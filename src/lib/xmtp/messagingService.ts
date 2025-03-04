@@ -188,17 +188,13 @@ export class XmtpMessagingService {
     }
     
     try {
-      this.logger.log(`Starting message stream for conversation: ${conversation.topic || conversation.id}`);
-      
       // Check if conversation has the stream method (new API) or streamMessages method (old API)
       if (typeof conversation.stream === 'function') {
-        this.logger.log('Using conversation.stream() method (new API)');
         return this.setupStreamWithNewApi(conversation, options);
       } else if (typeof conversation.streamMessages === 'function') {
-        this.logger.log('Using conversation.streamMessages() method (old API)');
         return this.setupStreamWithOldApi(conversation, options);
       } else {
-        this.logger.error('Conversation object does not have stream or streamMessages method:', conversation);
+        this.logger.error('Conversation object does not have stream or streamMessages method');
         throw new Error('Invalid conversation object: missing stream/streamMessages method');
       }
     } catch (error) {
@@ -206,14 +202,17 @@ export class XmtpMessagingService {
       
       // If there's an onError callback, call it
       if (options.onError) {
-        options.onError(error);
+        try {
+          options.onError(error);
+        } catch (callbackError) {
+          this.logger.error('Error in onError callback:', callbackError);
+        }
       }
       
       // Return a dummy stream and cleanup function that will trigger reconnection
       return {
         stream: null,
         cleanup: () => {
-          this.logger.log('Dummy cleanup called for failed stream');
           if (options.onClose) {
             options.onClose();
           }
@@ -235,99 +234,234 @@ export class XmtpMessagingService {
     try {
       this.logger.log('Creating stream with conversation.stream() method...');
       
-      // Create the stream with callback handler
-      stream = conversation.stream(async (error: Error | null, msg: XmtpRawMessage) => {
-        if (error) {
-          this.logger.error('Error in message stream:', error);
-          if (options.onError) {
-            try {
-              options.onError(error);
-            } catch (callbackError) {
-              this.logger.error('Error in onError callback:', callbackError);
-            }
-          }
-          return;
-        }
+      // XMTP SDK v7+ uses a different stream pattern
+      // First check if we're dealing with the newer SDK that returns an AsyncGenerator
+      if (conversation.stream && !conversation.stream.length) {
+        this.logger.log('Detected newer XMTP SDK with AsyncGenerator stream');
         
-        if (!msg) {
-          this.logger.warn('Received empty message in stream');
-          return;
-        }
+        // Create a stream processor function that will run in the background
+        const processStream = async () => {
+          try {
+            // Get the stream (AsyncGenerator)
+            const messageStream = conversation.stream();
+            
+            // Store reference for cleanup
+            stream = messageStream;
+            
+            // Process messages as they come in
+            this.logger.log('Starting to process message stream (AsyncGenerator)');
+            for await (const msg of messageStream) {
+              if (!msg) {
+                this.logger.warn('Received empty message in stream');
+                continue;
+              }
+              
+              this.logger.log('New message received from AsyncGenerator stream:', msg.id);
+              
+              try {
+                // Process the message
+                await this.processStreamMessage(msg, options);
+              } catch (processingError) {
+                this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
+                if (options.onError) {
+                  try {
+                    options.onError(processingError);
+                  } catch (callbackError) {
+                    this.logger.error('Error in onError callback:', callbackError);
+                  }
+                }
+              }
+            }
+            
+            this.logger.log('Message stream (AsyncGenerator) ended');
+            if (options.onClose) {
+              try {
+                options.onClose();
+              } catch (closeError) {
+                this.logger.error('Error in onClose callback:', closeError);
+              }
+            }
+          } catch (streamError) {
+            this.logger.error('Error processing message stream (AsyncGenerator):', streamError);
+            if (options.onError) {
+              try {
+                options.onError(streamError);
+              } catch (callbackError) {
+                this.logger.error('Error in onError callback:', callbackError);
+              }
+            }
+            
+            // If the stream errors, call onClose to trigger reconnection
+            if (options.onClose) {
+              try {
+                options.onClose();
+              } catch (closeError) {
+                this.logger.error('Error in onClose callback after stream error:', closeError);
+              }
+            }
+          }
+        };
         
-        this.logger.log('🔄 New message received from stream:', msg.id);
+        // Start processing the stream in the background
+        processStream().catch(error => {
+          this.logger.error('Unhandled error in stream processor:', error);
+        });
         
-        try {
-          // Process the message
-          await this.processStreamMessage(msg, options);
-        } catch (processingError) {
-          this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
-          if (options.onError) {
-            try {
-              options.onError(processingError);
-            } catch (callbackError) {
-              this.logger.error('Error in onError callback:', callbackError);
+        // Store the stream reference for cleanup
+        this.activeStreams.set(streamKey, stream);
+        
+        this.logger.log(`Message stream (AsyncGenerator) created successfully for ${conversation.topic || conversation.id}, stored with key ${streamKey}`);
+        
+        // Add a periodic health check for the stream
+        const healthCheckInterval = setInterval(() => {
+          this.logger.log(`Health check for stream ${streamKey}`);
+          if (!this.activeStreams.has(streamKey)) {
+            this.logger.warn(`Stream ${streamKey} no longer in active streams map, clearing health check`);
+            clearInterval(healthCheckInterval);
+          }
+        }, 30000); // Check every 30 seconds
+        
+        // Define the cleanup function
+        const cleanup = () => {
+          try {
+            this.logger.log(`Cleaning up message stream for ${conversation.topic || conversation.id}`);
+            
+            // Clear the health check interval
+            clearInterval(healthCheckInterval);
+            
+            if (stream && typeof stream.return === 'function') {
+              try {
+                stream.return();
+                this.logger.log(`Stream closed for ${conversation.topic || conversation.id}`);
+              } catch (closeError) {
+                this.logger.error('Error closing stream:', closeError);
+              }
+            }
+            
+            // Remove from active streams
+            this.activeStreams.delete(streamKey);
+            this.logger.log(`Removed stream with key ${streamKey} from active streams`);
+            
+            // Call the onClose callback if provided
+            if (options.onClose) {
+              try {
+                options.onClose();
+              } catch (closeError) {
+                this.logger.error('Error in onClose callback:', closeError);
+              }
+            }
+          } catch (cleanupError) {
+            this.logger.error('Error cleaning up message stream:', cleanupError);
+            // Still call onClose even if there was an error
+            if (options.onClose) {
+              try {
+                options.onClose();
+              } catch (closeError) {
+                this.logger.error('Error in onClose callback during error handling:', closeError);
+              }
             }
           }
-        }
-      });
-      
-      // Store the stream reference for cleanup
-      this.activeStreams.set(streamKey, stream);
-      
-      this.logger.log(`Message stream created successfully for ${conversation.topic || conversation.id}, stored with key ${streamKey}`);
-      
-      // Add a periodic health check for the stream
-      const healthCheckInterval = setInterval(() => {
-        this.logger.log(`Health check for stream ${streamKey}`);
-        if (!this.activeStreams.has(streamKey)) {
-          this.logger.warn(`Stream ${streamKey} no longer in active streams map, clearing health check`);
-          clearInterval(healthCheckInterval);
-        }
-      }, 30000); // Check every 30 seconds
-      
-      // Define the cleanup function
-      const cleanup = () => {
-        try {
-          this.logger.log(`Cleaning up message stream for ${conversation.topic || conversation.id}`);
-          
-          // Clear the health check interval
-          clearInterval(healthCheckInterval);
-          
-          if (stream && typeof stream.unsubscribe === 'function') {
-            try {
-              stream.unsubscribe();
-              this.logger.log(`Stream unsubscribed for ${conversation.topic || conversation.id}`);
-            } catch (unsubError) {
-              this.logger.error('Error unsubscribing from stream:', unsubError);
+        };
+        
+        return { stream, cleanup };
+      } else {
+        // Older XMTP SDK with callback-based stream
+        this.logger.log('Using callback-based stream API');
+        
+        // Create the stream with callback handler
+        stream = conversation.stream(async (error: Error | null, msg: XmtpRawMessage) => {
+          if (error) {
+            this.logger.error('Error in message stream:', error);
+            if (options.onError) {
+              try {
+                options.onError(error);
+              } catch (callbackError) {
+                this.logger.error('Error in onError callback:', callbackError);
+              }
             }
+            return;
           }
           
-          // Remove from active streams
-          this.activeStreams.delete(streamKey);
-          this.logger.log(`Removed stream with key ${streamKey} from active streams`);
+          if (!msg) {
+            this.logger.warn('Received empty message in stream');
+            return;
+          }
           
-          // Call the onClose callback if provided
-          if (options.onClose) {
-            try {
-              options.onClose();
-            } catch (closeError) {
-              this.logger.error('Error in onClose callback:', closeError);
+          this.logger.log('🔄 New message received from stream:', msg.id);
+          
+          try {
+            // Process the message
+            await this.processStreamMessage(msg, options);
+          } catch (processingError) {
+            this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
+            if (options.onError) {
+              try {
+                options.onError(processingError);
+              } catch (callbackError) {
+                this.logger.error('Error in onError callback:', callbackError);
+              }
             }
           }
-        } catch (cleanupError) {
-          this.logger.error('Error cleaning up message stream:', cleanupError);
-          // Still call onClose even if there was an error
-          if (options.onClose) {
-            try {
-              options.onClose();
-            } catch (closeError) {
-              this.logger.error('Error in onClose callback during error handling:', closeError);
+        });
+        
+        // Store the stream reference for cleanup
+        this.activeStreams.set(streamKey, stream);
+        
+        this.logger.log(`Message stream created successfully for ${conversation.topic || conversation.id}, stored with key ${streamKey}`);
+        
+        // Add a periodic health check for the stream
+        const healthCheckInterval = setInterval(() => {
+          this.logger.log(`Health check for stream ${streamKey}`);
+          if (!this.activeStreams.has(streamKey)) {
+            this.logger.warn(`Stream ${streamKey} no longer in active streams map, clearing health check`);
+            clearInterval(healthCheckInterval);
+          }
+        }, 30000); // Check every 30 seconds
+        
+        // Define the cleanup function
+        const cleanup = () => {
+          try {
+            this.logger.log(`Cleaning up message stream for ${conversation.topic || conversation.id}`);
+            
+            // Clear the health check interval
+            clearInterval(healthCheckInterval);
+            
+            if (stream && typeof stream.unsubscribe === 'function') {
+              try {
+                stream.unsubscribe();
+                this.logger.log(`Stream unsubscribed for ${conversation.topic || conversation.id}`);
+              } catch (unsubError) {
+                this.logger.error('Error unsubscribing from stream:', unsubError);
+              }
+            }
+            
+            // Remove from active streams
+            this.activeStreams.delete(streamKey);
+            this.logger.log(`Removed stream with key ${streamKey} from active streams`);
+            
+            // Call the onClose callback if provided
+            if (options.onClose) {
+              try {
+                options.onClose();
+              } catch (closeError) {
+                this.logger.error('Error in onClose callback:', closeError);
+              }
+            }
+          } catch (cleanupError) {
+            this.logger.error('Error cleaning up message stream:', cleanupError);
+            // Still call onClose even if there was an error
+            if (options.onClose) {
+              try {
+                options.onClose();
+              } catch (closeError) {
+                this.logger.error('Error in onClose callback during error handling:', closeError);
+              }
             }
           }
-        }
-      };
-      
-      return { stream, cleanup };
+        };
+        
+        return { stream, cleanup };
+      }
     } catch (error) {
       this.logger.error('Error setting up message stream with new API:', error);
       
@@ -336,6 +470,8 @@ export class XmtpMessagingService {
         try {
           if (typeof stream.unsubscribe === 'function') {
             stream.unsubscribe();
+          } else if (typeof stream.return === 'function') {
+            stream.return();
           }
           this.activeStreams.delete(streamKey);
         } catch (cleanupError) {
@@ -562,29 +698,16 @@ export class XmtpMessagingService {
     options: MessageStreamOptions & MessageProcessingOptions = {}
   ): Promise<void> {
     try {
-      // Inspect the message to understand its structure
-      inspectMessage(msg, 'Stream Message');
-      
       // Determine if message is from bot
       const isFromBot = this.isMessageFromBot(msg, options);
-      this.logger.log(`Stream message ${msg.id} isFromBot determination: ${isFromBot}`, {
-        senderAddress: msg.senderAddress,
-        senderInboxId: msg.senderInboxId,
-        ourWalletAddress: options.ourWalletAddress,
-        ourInboxId: options.ourInboxId,
-        botInboxId: options.botInboxId
-      });
       
       // Handle content that might be a Promise
       let resolvedContent = msg.content;
       if (resolvedContent instanceof Promise) {
         try {
-          this.logger.log(`Stream message ${msg.id} content is a Promise, resolving...`);
           resolvedContent = await resolvedContent;
-          this.logger.log(`Stream message ${msg.id} content resolved:`, 
-            typeof resolvedContent === 'string' ? resolvedContent : 'non-string content');
         } catch (contentError) {
-          this.logger.error('Error resolving stream message content:', contentError);
+          // Don't log content errors to reduce spam
           resolvedContent = 'Error: Could not load message content';
         }
       }
@@ -592,7 +715,7 @@ export class XmtpMessagingService {
       // Check if this is an attachment (especially audio)
       let isAttachment = false;
       try {
-        // Check for XMTP.org attachment format
+        // Check for XMTP attachment format
         const hasXmtpAttachmentType = resolvedContent && 
                       typeof resolvedContent === 'object' && 
                       resolvedContent.type && 
@@ -602,87 +725,55 @@ export class XmtpMessagingService {
         // Check for contentType format (alternative format)
         const hasContentTypeAttachment = resolvedContent && 
                       typeof resolvedContent === 'object' && 
-                      resolvedContent.contentType && 
-                      resolvedContent.contentType.authorityId === 'xmtp.org' && 
-                      resolvedContent.contentType.typeId === 'attachment';
+                      msg.contentType && 
+                      typeof msg.contentType === 'object' && 
+                      msg.contentType.authorityId === 'xmtp.org' && 
+                      msg.contentType.typeId === 'attachment';
         
         isAttachment = hasXmtpAttachmentType || hasContentTypeAttachment;
-                      
-        if (isAttachment) {
-          this.logger.log(`Message ${msg.id} is an attachment`);
-        }
       } catch (attachmentError) {
-        this.logger.error(`Error checking if message ${msg.id} is an attachment:`, attachmentError);
-      }
-      
-      // Safely process content for the UI
-      let processedContent: any = resolvedContent;
-      
-      // If it's not an attachment and it's an object, safely stringify it
-      if (!isAttachment && typeof resolvedContent === 'object') {
-        try {
-          // Use a replacer function to handle circular references and binary data
-          const safeReplacer = (key: string, value: any) => {
-            if (value instanceof Uint8Array) {
-              return `[Binary data (${value.length} bytes)]`;
-            }
-            if (typeof value === 'bigint') {
-              return value.toString();
-            }
-            return value;
-          };
-          
-          processedContent = JSON.stringify(resolvedContent, safeReplacer);
-        } catch (stringifyError: any) {
-          this.logger.error(`Error stringifying message ${msg.id} content:`, stringifyError);
-          processedContent = `Error: Could not process message content (${stringifyError.message})`;
-        }
+        // Don't log attachment errors to reduce spam
       }
 
-      // Create a standardized message object
+      // Convert timestamp to Date object if it's a string
+      const timestamp = typeof msg.sent === 'string' ? new Date(msg.sent) : msg.sent;
+
+      // Process the message into our standard format
       const processedMessage: ChatMessage = {
         id: msg.id,
-        // For attachments, preserve the original structure instead of stringifying
-        content: isAttachment ? resolvedContent : processedContent,
+        content: resolvedContent,
+        timestamp: timestamp,
         sender: msg.senderAddress || msg.senderInboxId || 'unknown',
-        timestamp: msg.sent instanceof Date ? msg.sent : new Date(msg.sentAtNs ? Number(msg.sentAtNs / BigInt(1000000)) : Date.now()),
         isBot: isFromBot,
-        senderInboxId: msg.senderInboxId, // Add this for debugging
-        ...(options.includeRawMessage ? { rawMessage: msg } : {})
+        senderInboxId: msg.senderInboxId
       };
-      
-      // Log the processed message before calling the callback
-      this.logger.log(`✅ Processed message ${msg.id} ready for UI:`, {
-        id: processedMessage.id,
-        contentType: typeof processedMessage.content,
-        isBot: processedMessage.isBot,
-        sender: processedMessage.sender,
-        timestamp: processedMessage.timestamp
-      });
-      
+
+      // Add the raw message if requested
+      if (options.includeRawMessage) {
+        (processedMessage as any).rawMessage = msg;
+      }
+
       // Call the onMessage callback if provided
       if (options.onMessage) {
-        this.logger.log(`📤 Calling onMessage callback for message ${msg.id}`);
         try {
           options.onMessage(processedMessage);
         } catch (callbackError) {
-          this.logger.error(`Error in onMessage callback for message ${msg.id}:`, callbackError);
-          // Don't rethrow this error as it would break the stream
-        }
-      } else {
-        this.logger.warn(`⚠️ No onMessage callback provided for message ${msg.id}`);
-      }
-    } catch (processingError) {
-      this.logger.error(`Error processing stream message ${msg?.id || 'unknown'}:`, processingError);
-      // Don't rethrow the error as it would break the stream
-      // Instead, try to call the onError callback if provided
-      if (options.onError) {
-        try {
-          options.onError(processingError);
-        } catch (callbackError) {
-          this.logger.error('Error in onError callback:', callbackError);
+          // Don't log callback errors to reduce spam
         }
       }
+    } catch (error) {
+      // Only log critical errors, not common ones
+      const errorString = String(error);
+      const isCommonError = errorString.includes('Worker') || 
+                           errorString.includes('error decoding response body') ||
+                           errorString.includes('expected `,` or `}`');
+      
+      if (!isCommonError) {
+        this.logger.error('Error processing stream message:', error);
+      }
+      
+      // Re-throw the error to be handled by the caller
+      throw error;
     }
   }
 
@@ -763,22 +854,60 @@ export class XmtpMessagingService {
         throw new Error('Cannot send message: conversation object is invalid or missing send method');
       }
       
-      // Send the message
+      // Send the message with a timeout to prevent hanging
       this.logger.log('🔄 Calling conversation.send() to send message...');
-      const sentMessage = await conversation.send(preparedContent);
+      
+      // Create a promise that will resolve with the sent message or reject after a timeout
+      const sendWithTimeout = async (timeout = 10000) => {
+        return new Promise<any>(async (resolve, reject) => {
+          // Set up a timeout to reject the promise if it takes too long
+          const timeoutId = setTimeout(() => {
+            this.logger.warn(`⏱️ Send operation timed out after ${timeout}ms`);
+            // Resolve with a synthetic message instead of rejecting to allow the UI to continue
+            const syntheticId = `timeout-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+            resolve({ 
+              id: syntheticId, 
+              content: preparedContent,
+              synthetic: true,
+              timedOut: true
+            });
+          }, timeout);
+          
+          try {
+            // Attempt to send the message
+            const result = await conversation.send(preparedContent);
+            // Clear the timeout since we got a response
+            clearTimeout(timeoutId);
+            // Resolve with the result
+            resolve(result);
+          } catch (error) {
+            // Clear the timeout since we got an error
+            clearTimeout(timeoutId);
+            // Reject with the error
+            reject(error);
+          }
+        });
+      };
+      
+      // Send with a 10-second timeout
+      const sentMessage = await sendWithTimeout(10000);
       
       // Log what we got back
       this.logger.log(`✅ Message sent successfully:`, {
-        id: sentMessage?.id,
-        contentType: sentMessage?.contentType?.toString() || (sentMessage?.content ? typeof sentMessage.content : 'unknown'),
-        senderAddress: sentMessage?.senderAddress,
-        recipientAddress: sentMessage?.recipientAddress,
-        sent: sentMessage?.sent
+        id: (sentMessage as any)?.id,
+        contentType: (sentMessage as any)?.contentType?.toString() || 
+                    ((sentMessage as any)?.content ? typeof (sentMessage as any).content : 'unknown'),
+        senderAddress: (sentMessage as any)?.senderAddress,
+        recipientAddress: (sentMessage as any)?.recipientAddress,
+        sent: (sentMessage as any)?.sent,
+        timedOut: (sentMessage as any)?.timedOut || false
       });
       
       // Inspect the sent message if it exists
-      if (sentMessage) {
+      if (sentMessage && !(sentMessage as any)?.timedOut) {
         inspectMessage(sentMessage, 'Sent message');
+      } else if ((sentMessage as any)?.timedOut) {
+        this.logger.log('Send operation timed out, but continuing with synthetic message');
       } else {
         this.logger.log('No message object returned, but send operation completed');
       }
@@ -793,14 +922,14 @@ export class XmtpMessagingService {
       // If we got something that looks like a message ID in any form, consider it successful
       if (sentMessage && typeof sentMessage === 'object') {
         // If it has an ID property, it's probably a valid message
-        if (sentMessage.id) {
-          this.logger.log(`📨 Message ${sentMessage.id} sent successfully and should appear in stream`);
+        if ((sentMessage as any).id) {
+          this.logger.log(`📨 Message ${(sentMessage as any).id} sent successfully and should appear in stream`);
           return sentMessage;
         }
         
         // Check if any property looks like a message ID (64 character hex string)
         for (const key in sentMessage) {
-          const value = sentMessage[key];
+          const value = (sentMessage as any)[key];
           if (typeof value === 'string' && /^[0-9a-f]{64}$/i.test(value)) {
             this.logger.log(`📨 Found potential message ID in response: ${value}`);
             return { ...sentMessage, id: value, content: messageContent };
@@ -808,14 +937,14 @@ export class XmtpMessagingService {
         }
         
         // If the object itself is an array or has array-like properties that look like a hex string
-        if (Array.isArray(sentMessage) || sentMessage.length) {
+        if (Array.isArray(sentMessage) || (sentMessage as any).length) {
           const hexChars = '0123456789abcdef';
           let isHexString = true;
           let hexString = '';
           
           // Try to convert array-like object to hex string
-          for (let i = 0; i < sentMessage.length; i++) {
-            const char = String(sentMessage[i]).toLowerCase();
+          for (let i = 0; i < (sentMessage as any).length; i++) {
+            const char = String((sentMessage as any)[i]).toLowerCase();
             if (hexChars.includes(char)) {
               hexString += char;
             } else {

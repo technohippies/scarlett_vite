@@ -19,6 +19,33 @@ interface ExtendedChatMessage extends BaseChatMessage {
   senderInboxId?: string;
 }
 
+// Helper function to check if a message is an audio attachment
+const isAudioAttachment = (content: any): boolean => {
+  if (!content) return false;
+  
+  try {
+    // Check for XMTP attachment format
+    if (content.type && 
+        typeof content.type === 'object' &&
+        content.type.authorityId === 'xmtp.org' && 
+        content.type.typeId === 'attachment') {
+      return true;
+    }
+    
+    // Check for contentType property
+    if (content.contentType && 
+        typeof content.contentType === 'object' &&
+        content.contentType.authorityId === 'xmtp.org' && 
+        content.contentType.typeId === 'attachment') {
+      return true;
+    }
+    
+    return false;
+  } catch (error) {
+    return false;
+  }
+};
+
 // Simple date formatter function with improved error handling
 const formatMessageTime = (timestamp: any) => {
   try {
@@ -79,6 +106,7 @@ const ChatPage: React.FC = () => {
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageStreamCleanup = useRef<CleanupFunction | null>(null);
+  const streamHealthCheckInterval = useRef<NodeJS.Timeout | null>(null);
   
   // State
   const [chatMessages, setChatMessages] = useState<ExtendedChatMessage[]>([]);
@@ -245,15 +273,12 @@ const ChatPage: React.FC = () => {
       
       // Get the wallet address from the XMTP client
       const ourWalletAddress = (xmtp.client as any).address;
-      console.log(`Our wallet address: ${ourWalletAddress}`);
       
       // Get our inbox ID from the client
       const ourInboxId = xmtp.client.inboxId || '';
-      console.log(`Our inbox ID: ${ourInboxId}`);
       
       // Use a known bot inbox ID
       const botInboxId = KNOWN_BOT_INBOX_IDS[0];
-      console.log(`Using bot inbox ID: ${botInboxId}`);
       
       // Create a conversation with the bot
       console.log('Creating conversation with bot...');
@@ -265,12 +290,7 @@ const ChatPage: React.FC = () => {
         return;
       }
       
-      console.log('Bot conversation created successfully:', {
-        id: conversation.id || conversation.topic,
-        topic: conversation.topic,
-        peerAddress: conversation.peerAddress,
-        peerInboxId: conversation.peerInboxId
-      });
+      console.log('Bot conversation created successfully');
       
       // Store the conversation and IDs for later use
       setBotConversation(conversation);
@@ -289,7 +309,12 @@ const ChatPage: React.FC = () => {
         });
         
         console.log(`Loaded ${messages.length} messages`);
-        setChatMessages(messages);
+        
+        // Only update messages if we have new ones or none yet
+        if (messages.length > 0 && (chatMessages.length === 0 || messages.length > chatMessages.length)) {
+          setChatMessages(messages);
+        }
+        
         setSendStatus(null);
         
         // Set up the message stream
@@ -298,7 +323,6 @@ const ChatPage: React.FC = () => {
           
           // Clean up any existing stream
           if (messageStreamCleanup.current) {
-            console.log('Cleaning up existing message stream');
             try {
               messageStreamCleanup.current();
             } catch (cleanupError) {
@@ -308,7 +332,6 @@ const ChatPage: React.FC = () => {
           }
           
           // Set up a new stream with the messaging service
-          console.log('Creating new message stream for conversation:', conversation.topic || conversation.id);
           const { cleanup } = await xmtpMessagingService.setupMessageStream(
             conversation,
             {
@@ -316,26 +339,13 @@ const ChatPage: React.FC = () => {
               ourInboxId,
               botInboxId: botInboxId || KNOWN_BOT_INBOX_IDS[0],
               onMessage: (message: ExtendedChatMessage) => {
-                console.log('📥 New message received in onMessage callback:', {
-                  id: message.id,
-                  sender: message.sender,
-                  isBot: message.isBot,
-                  contentType: typeof message.content,
-                  contentPreview: typeof message.content === 'string' 
-                    ? message.content.substring(0, 50) 
-                    : 'non-string content'
-                });
-                
                 // Add the message to our state
                 setChatMessages(prev => {
                   // Check if we already have this message
                   const exists = prev.some(m => m.id === message.id);
                   if (exists) {
-                    console.log(`⚠️ Message ${message.id} already exists in chat state, not adding`);
                     return prev;
                   }
-                  
-                  console.log(`🔍 Current chat messages count: ${prev.length}`);
                   
                   // Remove any temporary messages with the same content
                   // This prevents duplicate messages when sending
@@ -344,14 +354,8 @@ const ChatPage: React.FC = () => {
                       m.content === message.content && 
                       (m as any).sending === true;
                     
-                    if (isTempMessage) {
-                      console.log(`🔄 Removing temporary message with content matching ${message.id}`);
-                    }
-                    
                     return !isTempMessage;
                   });
-                  
-                  console.log(`➕ Adding new message ${message.id} to chat state (total: ${filtered.length + 1})`);
                   
                   // Force scroll to bottom on next render
                   setTimeout(() => {
@@ -360,52 +364,35 @@ const ChatPage: React.FC = () => {
                     }
                   }, 100);
                   
-                  // Ensure we're actually adding the new message
-                  const newMessages = [...filtered, message];
-                  console.log(`📊 Updated chat messages count: ${newMessages.length}`);
-                  
-                  // Debug log all messages to verify state
-                  newMessages.forEach((msg, index) => {
-                    console.log(`Message ${index}: ${msg.id} - ${typeof msg.content === 'string' ? msg.content.substring(0, 30) : 'non-string content'}`);
-                  });
-                  
-                  return newMessages;
+                  // Return the updated messages array
+                  return [...filtered, message];
                 });
               },
               onError: (error) => {
-                console.error('❌ Error in message stream:', error);
-                
-                // Check if this is a worker error (likely XMTP worker)
+                // Only log non-worker errors to reduce spam
                 const errorString = String(error);
                 const isWorkerError = errorString.includes('Worker') || 
                                      errorString.includes('error decoding response body') ||
                                      errorString.includes('expected `,` or `}`');
                 
-                if (isWorkerError) {
-                  console.log('Detected XMTP worker error, attempting immediate recovery...');
-                  
-                  // Clear the current cleanup function
-                  messageStreamCleanup.current = null;
-                  
-                  // Try to recover from worker errors by re-establishing the stream with a shorter delay
-                  setTimeout(() => {
-                    console.log('🔄 Attempting to recover from worker error by re-establishing stream...');
-                    loadBotConversation();
-                  }, 1000);
-                } else {
-                  // For other errors, use a longer delay
-                  setTimeout(() => {
-                    console.log('🔄 Attempting to recover from stream error by re-establishing stream...');
-                    loadBotConversation();
-                  }, 3000);
+                if (!isWorkerError) {
+                  console.error('Error in message stream:', error);
                 }
+                
+                // Try to recover by re-establishing the stream after a delay
+                // Use a shorter delay for worker errors which are more common
+                setTimeout(() => {
+                  if (!messageStreamCleanup.current) {
+                    console.log('Attempting to recover from stream error...');
+                    loadBotConversation();
+                  }
+                }, isWorkerError ? 1000 : 3000);
               },
               onClose: () => {
                 console.log('Message stream closed');
                 messageStreamCleanup.current = null;
                 
                 // Try to reconnect if the stream closes unexpectedly
-                console.log('Message stream closed unexpectedly, attempting to reconnect...');
                 setTimeout(() => {
                   if (!messageStreamCleanup.current) {
                     console.log('Reconnecting message stream after unexpected close');
@@ -418,109 +405,181 @@ const ChatPage: React.FC = () => {
           
           // Store the cleanup function for later
           messageStreamCleanup.current = cleanup;
+          
+          // Set up a periodic check to ensure the stream is still active
+          if (streamHealthCheckInterval.current) {
+            clearInterval(streamHealthCheckInterval.current);
+          }
+          
+          streamHealthCheckInterval.current = setInterval(() => {
+            if (!messageStreamCleanup.current) {
+              console.log('Stream health check: Stream is inactive, reconnecting...');
+              clearInterval(streamHealthCheckInterval.current!);
+              streamHealthCheckInterval.current = null;
+              loadBotConversation();
+            }
+          }, 60000); // Check every minute
+          
           console.log('Message stream setup complete');
         } catch (streamError) {
           console.error('Error setting up message stream:', streamError);
-          setSendStatus('Error setting up message stream. Please try again.');
+          setSendStatus('Error: Failed to set up message stream');
           
           // Try to recover automatically after a delay
           setTimeout(() => {
-            console.log('Attempting automatic recovery after stream setup error...');
             loadBotConversation();
           }, 5000);
         }
       } catch (loadError) {
         console.error('Error loading messages:', loadError);
-        setSendStatus('Error loading messages. Please try again.');
+        setSendStatus('Error: Failed to load messages');
+        
+        // Try to recover automatically after a delay
+        setTimeout(() => {
+          loadBotConversation();
+        }, 5000);
       }
     } catch (error) {
-      console.error('Error loading bot conversation:', error);
-      setSendStatus('Error connecting to bot. Please try again.');
+      console.error('Error creating bot conversation:', error);
+      setSendStatus('Error: Failed to create bot conversation');
+      
+      // Try to recover automatically after a delay
+      setTimeout(() => {
+        loadBotConversation();
+      }, 10000);
     }
+    
+    // Set up a cleanup function for when the component unmounts
+    return () => {
+      if (streamHealthCheckInterval.current) {
+        clearInterval(streamHealthCheckInterval.current);
+        streamHealthCheckInterval.current = null;
+      }
+      
+      if (messageStreamCleanup.current) {
+        try {
+          messageStreamCleanup.current();
+        } catch (error) {
+          console.error('Error cleaning up message stream:', error);
+        }
+        messageStreamCleanup.current = null;
+      }
+    };
   };
   
   // Function to send a message to the bot
   const sendMessageToBot = async (messageText: string) => {
-    try {
-      // Check if we have a bot conversation and xmtp
-      if (!botConversation) {
-        console.error('Cannot send message: No bot conversation');
-        setSendStatus('Error: Please connect to XMTP first');
-        return;
-      }
-      
-      console.log(`📤 Preparing to send message to bot: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`);
-      
-      // Create a temporary message to show in the UI
-      const tempMessage: ExtendedChatMessage = {
-        id: `temp-${Date.now()}`,
+    if (!botConversation) {
+      console.error('Cannot send message: No bot conversation');
+      setSendStatus('Please connect to the bot first');
+      return;
+    }
+    
+    // Create a temporary ID for this message
+    const tempMessageId = `temp-${Date.now()}`;
+    
+    // Add a temporary message to the UI immediately
+    setChatMessages(prev => [
+      ...prev,
+      {
+        id: tempMessageId,
         content: messageText,
-        sender: 'user', // This is a user message, not a bot message
         timestamp: new Date(),
-        isBot: false, // Explicitly mark as NOT a bot message
-        sending: true
-      };
-      
-      // Add the temporary message to the chat
-      console.log(`➕ Adding temporary message ${tempMessage.id} to chat state`);
-      setChatMessages(prev => [...prev, tempMessage]);
-      
-      // Set sending state
-      setIsSendingMessage(true);
-      console.log('🔄 Setting isSendingMessage to true');
-      
-      try {
-        // Send the message using the messaging service
-        console.log(`📨 Sending message to bot via XMTP: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`);
-        const sentMessage = await xmtpMessagingService.sendMessage(botConversation, messageText);
-        console.log('✅ Message sent successfully via XMTP:', sentMessage);
-        
-        // Log the current message stream status
-        console.log('🔍 Current message stream status:', {
-          botConversation: botConversation ? 'exists' : 'missing',
-          messageStreamCleanup: messageStreamCleanup.current ? 'exists' : 'missing',
-          chatMessagesCount: chatMessages.length
-        });
-        
-        // Verify the message stream is active
-        if (!messageStreamCleanup.current) {
-          console.warn('⚠️ Message stream is not active after sending message. Re-establishing stream...');
-          await loadBotConversation();
-        }
-        
-        // The real message will be added when it comes back through the stream
-        // We can remove the temporary message once we know it's sent
-        setTimeout(() => {
-          setChatMessages((prev) => {
-            const newMessages = prev.filter(msg => msg.id !== tempMessage.id);
-            console.log(`🔄 Removing temporary message ${tempMessage.id} after successful send (remaining: ${newMessages.length})`);
-            return newMessages;
-          });
-        }, 500);
-      } catch (error: any) {
-        console.error('❌ Error sending message:', error);
-        
-        // Mark the temporary message as having an error
-        setChatMessages((prev) => {
-          console.log(`⚠️ Marking temporary message ${tempMessage.id} as error`);
-          return prev.map(msg => 
-            msg.id === tempMessage.id 
-              ? { ...msg, sending: false, error: true } as any
-              : msg
-          );
-        });
-        
-        // Show error status
-        setSendStatus(`Error sending message: ${error.message || 'Unknown error'}`);
-      } finally {
-        // Reset sending state
-        setIsSendingMessage(false);
-        console.log('🔄 Setting isSendingMessage to false');
+        sender: ourInboxId || 'me',
+        isBot: false,
+        sending: true,
+        direction: 'sent'
+      } as ExtendedChatMessage
+    ]);
+    
+    // Scroll to the bottom
+    setTimeout(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
       }
+    }, 100);
+    
+    // Set up a timeout to show "sending..." status if it takes too long
+    let timeoutId = setTimeout(() => {
+      setSendStatus('Sending message...');
+    }, 2000);
+    
+    try {
+      // Send the message using the messaging service
+      console.log(`Sending message to bot: "${messageText.substring(0, 30)}${messageText.length > 30 ? '...' : ''}"`);
+      const sentMessage = await xmtpMessagingService.sendMessage(botConversation, messageText);
+      
+      // Clear the timeout since we got a response
+      clearTimeout(timeoutId);
+      
+      console.log('Message sent successfully');
+      
+      // Check if we need to reconnect the stream to ensure we receive the response
+      if (!messageStreamCleanup.current) {
+        console.log('Message stream not active, reconnecting...');
+        await loadBotConversation();
+      }
+      
+      // The real message will be added when it comes back through the stream
+      // We can keep the temporary message visible until then
+      setTimeout(() => {
+        // If the real message hasn't appeared after 2 seconds, keep the temp message but mark it as sent
+        setChatMessages((prev) => {
+          // Check if we already received the real message
+          const hasRealMessage = prev.some(msg => 
+            msg.id !== tempMessageId && 
+            msg.content === messageText && 
+            msg.sender === ourInboxId
+          );
+          
+          if (hasRealMessage) {
+            // Remove the temporary message if we have the real one
+            return prev.filter(msg => msg.id !== tempMessageId);
+          } else {
+            // Keep the temporary message but mark it as sent
+            return prev.map(msg => 
+              msg.id === tempMessageId 
+                ? { ...msg, sending: false } as any
+                : msg
+            );
+          }
+        });
+      }, 2000);
+      
+      // Clear any error status
+      setSendStatus(null);
+      
+      // Force a reconnection to ensure we get the response
+      setTimeout(() => {
+        if (!messageStreamCleanup.current) {
+          console.log('Reconnecting message stream after sending message');
+          loadBotConversation();
+        }
+      }, 1000);
     } catch (error: any) {
-      console.error('❌ Unexpected error in sendMessageToBot:', error);
-      setSendStatus(`Unexpected error: ${error.message || 'Unknown error'}`);
-      setIsSendingMessage(false);
+      // Clear the timeout since we got an error
+      clearTimeout(timeoutId);
+      
+      console.error('Error sending message:', error);
+      
+      // Mark the temporary message as having an error
+      setChatMessages((prev) => {
+        return prev.map(msg => 
+          msg.id === tempMessageId 
+            ? { ...msg, sending: false, error: true } as any
+            : msg
+        );
+      });
+      
+      // Set an error status
+      setSendStatus(`Error sending message: ${error.message || 'Unknown error'}`);
+      
+      // Try to reconnect the stream in case it's disconnected
+      if (!messageStreamCleanup.current) {
+        setTimeout(() => {
+          loadBotConversation();
+        }, 2000);
+      }
     }
   };
   
@@ -683,118 +742,76 @@ const ChatPage: React.FC = () => {
   
   // Function to render message content based on type
   const renderMessageContent = (message: ExtendedChatMessage) => {
-    // Handle null or undefined content
-    if (!message.content) {
-      console.log(`⚠️ Message ${message.id} has null or undefined content`);
-      return <span className="text-gray-400 italic">Empty message</span>;
+    // Check if the message is still sending
+    if (message.sending) {
+      return (
+        <div className="flex items-center">
+          <span className="whitespace-pre-wrap opacity-70">{message.content}</span>
+          <span className="ml-2 text-xs text-gray-500 italic">sending...</span>
+        </div>
+      );
     }
     
-    // Log the message content type for debugging
-    console.log(`🔍 Rendering message ${message.id}:`, {
-      contentType: typeof message.content,
-      sender: message.sender,
-      isBot: message.isBot,
-      contentPreview: typeof message.content === 'string' 
-        ? message.content.substring(0, 50) 
-        : 'non-string content'
-    });
-
-    // Handle attachment objects
-    if (typeof message.content === 'object') {
-      console.log(`🔍 Message ${message.id} has object content`);
-      
-      try {
-        // Use type assertion to access properties safely
-        const content = message.content as any;
-        
-        // Check if this is an XMTP attachment
-        if (content && content.type && 
-            typeof content.type === 'object' &&
-            content.type.authorityId === 'xmtp.org' && 
-            content.type.typeId === 'attachment') {
-          
-          console.log(`🎵 Message ${message.id} is an audio attachment`);
-          
-          try {
-            // Try to create a blob from the binary content
-            if (content.content && (content.content instanceof Uint8Array || Array.isArray(content.content))) {
-              console.log(`Creating audio blob from binary content for message ${message.id}`);
-              
-              // Safely create a blob from the binary content
-              try {
-                const blob = new Blob([content.content], { type: 'audio/mpeg' });
-                const url = URL.createObjectURL(blob);
-                
-                return (
-                  <div className="audio-player-container">
-                    <audio controls src={url} className="w-full" />
-                  </div>
-                );
-              } catch (blobError) {
-                console.error(`❌ Error creating blob for message ${message.id}:`, blobError);
-                return <span className="text-gray-400 italic">Error creating audio player</span>;
-              }
-            }
-            
-            // If no binary content, try to use encoded content
-            if (content.encodedContent && typeof content.encodedContent === 'string') {
-              console.log(`Creating audio blob from encoded content for message ${message.id}`);
-              
-              try {
-                const binary = atob(content.encodedContent);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) {
-                  bytes[i] = binary.charCodeAt(i);
-                }
-                
-                const blob = new Blob([bytes], { type: 'audio/mpeg' });
-                const url = URL.createObjectURL(blob);
-                
-                return (
-                  <div className="audio-player-container">
-                    <audio controls src={url} className="w-full" />
-                  </div>
-                );
-              } catch (decodeError) {
-                console.error(`❌ Error decoding encoded content for message ${message.id}:`, decodeError);
-                return <span className="text-gray-400 italic">Error decoding audio content</span>;
-              }
-            }
-            
-            console.log(`⚠️ Audio attachment ${message.id} has no content or encodedContent`);
-            return <span className="text-gray-400 italic">Audio attachment (unable to play)</span>;
-          } catch (audioError) {
-            console.error(`❌ Error processing audio attachment ${message.id}:`, audioError);
-            return <span className="text-gray-400 italic">Error processing audio attachment</span>;
-          }
-        }
-        
-        // For other object types, safely stringify
+    // Check if the message had an error
+    if (message.error) {
+      return (
+        <div className="flex items-center">
+          <span className="whitespace-pre-wrap text-red-500">{message.content}</span>
+          <span className="ml-2 text-xs text-red-500 italic">error</span>
+        </div>
+      );
+    }
+    
+    // Handle audio attachments
+    if (message.content && typeof message.content === 'object') {
+      // Check if it's an audio attachment
+      if (isAudioAttachment(message.content)) {
         try {
-          // Use a replacer function to handle circular references and binary data
-          const safeReplacer = (_key: string, value: any) => {
-            if (value instanceof Uint8Array) {
-              return `[Binary data (${value.length} bytes)]`;
-            }
-            if (typeof value === 'bigint') {
-              return value.toString();
-            }
-            return value;
-          };
+          const content = message.content as any;
+          let audioData;
           
-          const stringified = JSON.stringify(message.content, safeReplacer, 2);
-          return <pre className="text-sm whitespace-pre-wrap">{stringified}</pre>;
-        } catch (stringifyError) {
-          console.error(`❌ Error stringifying object content for message ${message.id}:`, stringifyError);
-          return <span className="text-gray-400 italic">[Complex object - cannot display]</span>;
+          if (content.content) {
+            // XMTP attachment format
+            audioData = content.content;
+          } else if (content.data) {
+            // Alternative format
+            audioData = content.data;
+          } else {
+            // Try to use the content itself
+            audioData = content;
+          }
+          
+          const blob = new Blob([audioData], { type: 'audio/mpeg' });
+          const url = URL.createObjectURL(blob);
+          
+          return (
+            <div className="audio-message">
+              <audio controls src={url} className="w-full" />
+            </div>
+          );
+        } catch (error) {
+          return <span className="text-red-500">Error loading audio</span>;
         }
+      }
+      
+      // For other object types, stringify
+      try {
+        const safeReplacer = (_key: string, value: any) => {
+          if (value instanceof Uint8Array) {
+            return `[Binary data (${value.length} bytes)]`;
+          }
+          if (typeof value === 'bigint') {
+            return value.toString();
+          }
+          return value;
+        };
+        
+        return <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(message.content, safeReplacer, 2)}</pre>;
       } catch (error) {
-        console.error(`❌ Error processing object content for message ${message.id}:`, error);
-        return <span className="text-gray-400 italic">Error displaying message content</span>;
+        return <span className="text-gray-400 italic">Unsupported message format</span>;
       }
     }
     
-    // For string content, render as text
     if (typeof message.content === 'string') {
       // Check if it's JSON
       try {
@@ -804,7 +821,6 @@ const ChatPage: React.FC = () => {
           
           try {
             const parsed = JSON.parse(message.content);
-            console.log(`📄 Message ${message.id} contains JSON:`, parsed);
             
             // If it has a specific structure we recognize, render accordingly
             if (parsed.type === 'question' && parsed.options) {
@@ -826,36 +842,21 @@ const ChatPage: React.FC = () => {
             // Otherwise, render as formatted JSON
             return <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(parsed, null, 2)}</pre>;
           } catch (parseError) {
-            console.log(`📝 Message ${message.id} contains text that looks like JSON but failed to parse:`, parseError);
             return <span className="whitespace-pre-wrap">{message.content}</span>;
           }
         }
         
         // Not JSON-like, render as plain text
-        console.log(`📝 Message ${message.id} contains plain text`);
         return <span className="whitespace-pre-wrap">{message.content}</span>;
       } catch (e) {
         // JSON parsing error, render as plain text
-        console.log(`📝 Message ${message.id} contains plain text (JSON parse failed)`);
         return <span className="whitespace-pre-wrap">{message.content}</span>;
       }
     }
     
-    // For other types, stringify
-    console.log(`⚠️ Message ${message.id} has unknown content type:`, typeof message.content);
+    // For other types, show unsupported message
     return <span className="text-gray-400 italic">Unsupported message format</span>;
   };
-  
-  // Clean up message stream on unmount
-  useEffect(() => {
-    return () => {
-      // Clean up the message stream if it exists
-      if (messageStreamCleanup.current) {
-        console.log('Cleaning up message stream on component unmount');
-        messageStreamCleanup.current();
-      }
-    };
-  }, []);
   
   if (!isReownConnected) {
     return (
