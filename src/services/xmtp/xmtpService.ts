@@ -29,6 +29,12 @@ export interface XmtpMessage {
     character_start_times_seconds: number[];
     character_end_times_seconds: number[];
   };
+  wordTimestamps?: {
+    text: string;
+    start_time: number;
+    end_time: number;
+  }[];
+  pairId?: string;
 }
 
 export interface XmtpConversation {
@@ -42,7 +48,9 @@ class XmtpService {
   private messageStreams: any[] = [];
   private connectionTimestamp: number = 0;
   private processedMessageIds: Set<string> = new Set();
-  private botAddress = "0x937C0d4a6294cdfa575de17382c7076b579DC176"; // gm.xmtp.eth
+  private pendingAudioMessages: Map<string, XmtpMessage> = new Map();
+  private pendingTextMessages: Map<string, XmtpMessage> = new Map();
+  private botAddress = "0xB0dD2a6FAB0180C8b2fc4f144273Cc693d7896Ed"; 
 
   // Connect to XMTP
   async connect(): Promise<{ success: boolean; error?: string; address?: string }> {
@@ -119,6 +127,8 @@ class XmtpService {
     this.client = null;
     this.closeAllStreams();
     this.processedMessageIds.clear();
+    this.pendingAudioMessages.clear();
+    this.pendingTextMessages.clear();
   }
 
   // Close all message streams
@@ -228,11 +238,43 @@ class XmtpService {
     let audioUrl: string | null = null;
     let alignment = undefined;
     let normalized_alignment = undefined;
+    let wordTimestamps = undefined;
+    let pairId = undefined;
     
     if (isTextMessage) {
       try {
         if (typeof message.content === 'string') {
-          displayContent = message.content;
+          // Try to parse as JSON if it looks like JSON
+          if (message.content.trim().startsWith('{') && message.content.trim().endsWith('}')) {
+            try {
+              const jsonContent = JSON.parse(message.content);
+              console.log('Parsed JSON content:', jsonContent);
+              
+              // Check if it's our audio response format
+              if (jsonContent.message_type === 'audio_response' && jsonContent.content) {
+                displayContent = jsonContent.content.text || "Audio message";
+                
+                // Extract word timestamps if available
+                if (jsonContent.content.word_timestamps) {
+                  wordTimestamps = jsonContent.content.word_timestamps;
+                }
+                
+                // Extract pair ID if available
+                if (jsonContent.content.pair_id) {
+                  pairId = jsonContent.content.pair_id;
+                  console.log('Found pair ID in text message:', pairId);
+                }
+              } else {
+                displayContent = message.content;
+              }
+            } catch (e) {
+              // Not valid JSON, use as is
+              console.error('Error parsing JSON:', e);
+              displayContent = message.content;
+            }
+          } else {
+            displayContent = message.content;
+          }
         } else if (message.content && typeof message.content === 'object') {
           // Try to parse as JSON
           const jsonContent = message.content as any;
@@ -252,6 +294,16 @@ class XmtpService {
             
             if (jsonContent.normalized_alignment) {
               normalized_alignment = jsonContent.normalized_alignment;
+            }
+            
+            // Extract word timestamps if available
+            if (jsonContent.word_timestamps) {
+              wordTimestamps = jsonContent.word_timestamps;
+            }
+            
+            // Extract pair ID if available
+            if (jsonContent.pair_id) {
+              pairId = jsonContent.pair_id;
             }
           } else {
             // Regular JSON content
@@ -280,6 +332,15 @@ class XmtpService {
             
             // Set display content to indicate it's an audio message
             displayContent = `🔊 Audio message: ${attachment.filename || 'audio file'}`;
+            
+            // Try to extract pair ID from filename
+            if (attachment.filename && attachment.filename.startsWith('response-') && attachment.filename.endsWith('.mp3')) {
+              const potentialPairId = attachment.filename.replace('response-', '').replace('.mp3', '');
+              if (potentialPairId.match(/^[0-9a-f-]+$/)) {
+                pairId = potentialPairId;
+                console.log('Found pair ID in audio filename:', pairId);
+              }
+            }
           } else {
             // For non-audio attachments, just show the filename
             displayContent = `📎 Attachment: ${attachment.filename || 'file'} (${attachment.mimeType || 'unknown type'})`;
@@ -305,7 +366,8 @@ class XmtpService {
       }
     }
     
-    return {
+    // Create the processed message
+    const processedMessage: XmtpMessage = {
       id: message.id,
       conversationId: message.conversationId,
       senderAddress: message.senderInboxId || 'unknown',
@@ -316,8 +378,72 @@ class XmtpService {
       isFromBot,
       audioUrl: audioUrl || undefined,
       alignment,
-      normalized_alignment
+      normalized_alignment,
+      wordTimestamps,
+      pairId
     };
+    
+    // Check if this message has a pair ID and needs to be paired
+    if (pairId) {
+      // If it's an audio message
+      if (audioUrl && !wordTimestamps) {
+        console.log('Storing audio message with pair ID:', pairId);
+        this.pendingAudioMessages.set(pairId, processedMessage);
+        
+        // Check if we have a matching text message
+        const matchingTextMessage = this.pendingTextMessages.get(pairId);
+        if (matchingTextMessage) {
+          console.log('Found matching text message for pair ID:', pairId);
+          // Combine the messages
+          const combinedMessage: XmtpMessage = {
+            ...matchingTextMessage,
+            audioUrl: processedMessage.audioUrl,
+            id: processedMessage.id, // Use the latest message ID
+            sentAt: processedMessage.sentAt // Use the latest timestamp
+          };
+          
+          // Remove the pending messages
+          this.pendingTextMessages.delete(pairId);
+          this.pendingAudioMessages.delete(pairId);
+          
+          return combinedMessage;
+        }
+        
+        // No matching text message yet, return null and wait
+        return null;
+      }
+      
+      // If it's a text message with word timestamps
+      if (wordTimestamps && !audioUrl) {
+        console.log('Storing text message with pair ID:', pairId);
+        this.pendingTextMessages.set(pairId, processedMessage);
+        
+        // Check if we have a matching audio message
+        const matchingAudioMessage = this.pendingAudioMessages.get(pairId);
+        if (matchingAudioMessage) {
+          console.log('Found matching audio message for pair ID:', pairId);
+          // Combine the messages
+          const combinedMessage: XmtpMessage = {
+            ...processedMessage,
+            audioUrl: matchingAudioMessage.audioUrl,
+            id: processedMessage.id, // Use the latest message ID
+            sentAt: processedMessage.sentAt // Use the latest timestamp
+          };
+          
+          // Remove the pending messages
+          this.pendingTextMessages.delete(pairId);
+          this.pendingAudioMessages.delete(pairId);
+          
+          return combinedMessage;
+        }
+        
+        // No matching audio message yet, return null and wait
+        return null;
+      }
+    }
+    
+    // If the message doesn't have a pair ID or already has both audio and word timestamps, return it as is
+    return processedMessage;
   }
 
   // Convert base64 to Blob
@@ -351,13 +477,19 @@ class XmtpService {
       const conversations = await this.client.conversations.list();
       
       // Find conversation with the bot
-      const botConversation = conversations.find(conv => {
-        // Check if it's a DM and has the right peer address
-        if ('peerInboxId' in conv) {
-          return conv.peerInboxId === this.botAddress;
-        }
-        return false;
-      });
+      const botConversations = await Promise.all(
+        conversations.map(async conv => {
+          // Check if it's a DM and has the right peer address
+          if ('peerInboxId' in conv) {
+            // peerInboxId is a function that returns a Promise<string>
+            const peerAddress = await conv.peerInboxId();
+            return peerAddress === this.botAddress ? conv : null;
+          }
+          return null;
+        })
+      );
+      
+      const botConversation = botConversations.find(conv => conv !== null);
       
       if (botConversation) {
         // Stream messages for the bot conversation
@@ -420,13 +552,19 @@ class XmtpService {
       const conversations = await this.client.conversations.list();
       
       // Find conversation with the bot
-      const botConversation = conversations.find(conv => {
-        // Check if it's a DM and has the right peer address
-        if ('peerInboxId' in conv) {
-          return conv.peerInboxId === this.botAddress;
-        }
-        return false;
-      });
+      const botConversations = await Promise.all(
+        conversations.map(async conv => {
+          // Check if it's a DM and has the right peer address
+          if ('peerInboxId' in conv) {
+            // peerInboxId is a function that returns a Promise<string>
+            const peerAddress = await conv.peerInboxId();
+            return peerAddress === this.botAddress ? conv : null;
+          }
+          return null;
+        })
+      );
+      
+      const botConversation = botConversations.find(conv => conv !== null);
       
       if (!botConversation) {
         return [];
@@ -436,10 +574,32 @@ class XmtpService {
       const messages = await botConversation.messages({ limit: 30n });
       
       const processedMessages: XmtpMessage[] = [];
+      
+      // First pass: process all messages and collect paired messages
       for (const message of messages) {
         const processedMessage = this.processMessage(message);
-        if (processedMessage) {
+        if (processedMessage && !processedMessage.pairId) {
+          // If the message doesn't have a pair ID, add it directly
           processedMessages.push(processedMessage);
+        }
+      }
+      
+      // Second pass: add any remaining paired messages that were successfully combined
+      for (const message of messages) {
+        const processedMessage = this.processMessage(message);
+        if (processedMessage && processedMessage.pairId) {
+          // Check if this message has both audio and word timestamps
+          if (processedMessage.audioUrl && processedMessage.wordTimestamps) {
+            // Check if we already have this message (by pair ID)
+            const existingIndex = processedMessages.findIndex(m => m.pairId === processedMessage.pairId);
+            if (existingIndex >= 0) {
+              // Replace the existing message
+              processedMessages[existingIndex] = processedMessage;
+            } else {
+              // Add as a new message
+              processedMessages.push(processedMessage);
+            }
+          }
         }
       }
       

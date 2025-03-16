@@ -20,8 +20,8 @@ export default defineConfig({
       usePolling: true,
     },
     host: true, // needed for the DC port mapping to work
-    strictPort: false, // Allow fallback to another port if 3002 is in use
-    port: 3002,
+    strictPort: false,
+    port: 3000,
   },
   resolve: {
     alias: {
