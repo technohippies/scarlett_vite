@@ -63,14 +63,21 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
       const words = message.wordTimestamps;
       
       // Create an array of word spans with appropriate highlighting
+      // Using a more stable highlighting approach that doesn't shift layout
       const wordSpans = words.map((word, index) => {
         const isActive = time >= word.start_time && time <= word.end_time;
         
         return (
           <span 
             key={index} 
-            className={`inline-block mx-0.5 ${isActive ? 'bg-blue-500 text-white px-1 py-0.5 rounded-md transition-all duration-100' : ''}`}
+            className={`relative inline-block mx-0.5 ${isActive ? 'text-blue-500' : ''}`}
           >
+            {isActive && (
+              <span 
+                className="absolute inset-0 bg-blue-100 rounded-sm -z-10" 
+                aria-hidden="true"
+              />
+            )}
             {word.text}
           </span>
         );
@@ -94,7 +101,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
         return (
           <span 
             key={index} 
-            className={isHighlighted ? 'bg-blue-500/10 text-blue-500 font-medium animate-pulse' : ''}
+            className={isHighlighted ? 'text-blue-500' : ''}
           >
             {char}
           </span>

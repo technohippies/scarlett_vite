@@ -50,7 +50,7 @@ class XmtpService {
   private processedMessageIds: Set<string> = new Set();
   private pendingAudioMessages: Map<string, XmtpMessage> = new Map();
   private pendingTextMessages: Map<string, XmtpMessage> = new Map();
-  private botAddress = "0xB0dD2a6FAB0180C8b2fc4f144273Cc693d7896Ed"; 
+  private botAddress = "0x42c10EFb6aD7a46f80A09731095c49b0c3865859"; 
 
   // Connect to XMTP
   async connect(): Promise<{ success: boolean; error?: string; address?: string }> {
