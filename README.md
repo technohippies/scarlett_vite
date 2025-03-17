@@ -1,3 +1,2 @@
-# Silk test site
+# Scarlett tutor
 
-This frontend is used for testing and demoing Silk from the perspective of an integrating site.
