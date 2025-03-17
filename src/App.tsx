@@ -172,7 +172,6 @@ function App() {
               </div>
             ) : !isAuthConnected || !isXmtpConnected ? (
               <div className="flex flex-col items-center justify-center h-full">
-                <h1 className="text-3xl font-bold mb-8 text-white">Voice Chat App</h1>
                 <ConnectButton 
                   onAuthSuccess={handleAuthSuccess} 
                   onXmtpSuccess={handleXmtpSuccess} 

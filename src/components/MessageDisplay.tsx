@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { XmtpMessage } from '../services/xmtp/xmtpService';
+import { ArrowCounterClockwise } from '@phosphor-icons/react';
 
 interface MessageDisplayProps {
   message: XmtpMessage | null;
@@ -201,6 +202,21 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
               onEnded={handleEnded}
               className="w-full rounded-lg"
             />
+            
+            <div className="mt-2 flex justify-start">
+              <button 
+                onClick={() => {
+                  if (audioRef.current) {
+                    audioRef.current.currentTime = 0;
+                    audioRef.current.play().catch(e => console.error("Failed to replay audio:", e));
+                  }
+                }}
+                className="flex items-center gap-2 text-sm text-gray-400 hover:text-blue-500 transition-colors"
+              >
+                <ArrowCounterClockwise size={20} weight="bold" />
+                <span>Replay</span>
+              </button>
+            </div>
           </div>
         )}
         
