@@ -157,36 +157,37 @@ function App() {
   return (
     <WagmiProvider config={wagmiConfig}>
       <QueryClientProvider client={queryClient}>
-        <div className="min-h-screen bg-neutral-800 text-white flex flex-col">
+        <div className="min-h-screen bg-neutral-800 text-white flex flex-col overflow-x-hidden">
           <Header 
             isConnected={isAuthConnected} 
             address={userAddress} 
             onLogout={handleLogout} 
           />
           
-          <main className="flex-1 flex flex-col items-center justify-center p-4">
+          <main className="flex-1 flex flex-col items-center justify-center p-4 w-full max-w-full">
             {isInitializing ? (
               <div className="flex flex-col items-center justify-center h-full">
                 <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
                 <p className="mt-4 text-gray-400">Initializing...</p>
               </div>
             ) : !isAuthConnected || !isXmtpConnected ? (
-              <div className="flex flex-col items-center justify-center h-full">
+              <div className="flex flex-col items-center justify-center h-full w-full">
+                <h1 className="text-2xl sm:text-3xl font-bold mb-8 text-white text-center px-4">Voice Chat App</h1>
                 <ConnectButton 
                   onAuthSuccess={handleAuthSuccess} 
                   onXmtpSuccess={handleXmtpSuccess} 
                 />
               </div>
             ) : (
-              <>
+              <div className="w-full max-w-full flex flex-col items-center">
                 <MessageDisplay message={currentMessage} isLoading={isLoading} />
                 <AudioRecorder onMessageSent={handleMessageSent} onError={handleError} />
-              </>
+              </div>
             )}
             
             {error && (
-              <div className="fixed bottom-24 left-0 right-0 flex justify-center">
-                <div className="bg-red-500 text-white px-4 py-2 rounded-md shadow-lg">
+              <div className="fixed bottom-24 left-0 right-0 flex justify-center px-4">
+                <div className="bg-red-500 text-white px-4 py-2 rounded-md shadow-lg max-w-full text-sm">
                   {error}
                 </div>
               </div>

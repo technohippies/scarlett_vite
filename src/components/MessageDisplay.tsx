@@ -184,14 +184,14 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
   }
   
   return (
-    <div className="flex flex-col items-center mt-16 px-4 max-w-2xl mx-auto">
-      <div className="w-full bg-gray-800 rounded-lg p-4 shadow-sm">
-        <div className="text-lg mb-4 text-white">
+    <div className="flex flex-col items-center mt-16 px-2 sm:px-4 w-full max-w-full">
+      <div className="w-full max-w-2xl bg-gray-800 rounded-lg p-3 sm:p-4 shadow-sm overflow-hidden">
+        <div className="text-base sm:text-lg mb-4 text-white break-words">
           {highlightedText || message.content}
         </div>
         
         {message.audioUrl && (
-          <div className="mt-2">
+          <div className="mt-2 w-full">
             <audio 
               ref={audioRef}
               src={message.audioUrl} 
@@ -221,7 +221,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
         )}
         
         {/* Debug information */}
-        <div className="mt-4 p-2 bg-gray-900 rounded text-xs text-gray-400 overflow-auto max-h-40">
+        <div className="mt-4 p-2 bg-gray-900 rounded text-xs text-gray-400 overflow-auto max-h-40 text-wrap break-all">
           <p>Message ID: {message.id}</p>
           <p>Sender: {message.senderAddress}</p>
           <p>Content Type: {message.contentType}</p>

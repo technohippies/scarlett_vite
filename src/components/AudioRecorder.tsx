@@ -130,7 +130,7 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ onMessageSent, onError })
     <div className="fixed bottom-6 left-0 right-0 flex justify-center">
       <Button
         size="round-lg"
-        className={`shadow-lg ${isRecording ? 'bg-destructive hover:bg-destructive' : 'bg-blue-500 hover:bg-blue-600'}`}
+        className={`shadow-lg ${isRecording ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600'}`}
         onMouseDown={isDesktop ? startRecording : undefined}
         onMouseUp={isDesktop ? stopRecording : undefined}
         onTouchStart={handleTouchStart}
@@ -139,16 +139,14 @@ const AudioRecorder: React.FC<AudioRecorderProps> = ({ onMessageSent, onError })
       >
         <Microphone size={32} weight={isRecording ? "fill" : "regular"} />
       </Button>
-      {isSending && (
-        <div className="absolute -top-10 left-0 right-0 text-center">
-          <span className="text-sm bg-background/80 px-3 py-1 rounded-full">Sending...</span>
+      {!isRecording && !isSending && (
+        <div className="absolute -top-10 left-0 right-0 flex justify-center">
+          <span className="text-xs text-muted-foreground bg-neutral-800/80 px-3 py-1 rounded-full">
+            <span className="hidden sm:inline">Hold space to record</span>
+            <span className="inline sm:hidden">Hold to record</span>
+          </span>
         </div>
       )}
-      <div className="absolute -top-10 left-0 right-0 text-center">
-        <span className="text-xs text-muted-foreground">
-          {isDesktop ? 'Hold space to record' : 'Tap and hold to record'}
-        </span>
-      </div>
     </div>
   );
 };
