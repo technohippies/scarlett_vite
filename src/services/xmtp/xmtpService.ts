@@ -54,37 +54,52 @@ class XmtpService {
 
   // Connect to XMTP
   async connect(): Promise<{ success: boolean; error?: string; address?: string }> {
+    console.log("[XmtpService] Connect method called");
+    
+    // If already connected, return success immediately
+    if (this.client) {
+      console.log("[XmtpService] Already connected to XMTP, returning existing connection");
+      return { success: true, address: authService.getUserAddress() };
+    }
+    
     try {
       // Check if already authenticated with wallet
       if (!authService.isConnected()) {
+        console.error("[XmtpService] Not connected to wallet");
         return { success: false, error: "Not connected to wallet" };
       }
 
       // Set connection timestamp
       this.connectionTimestamp = Date.now();
+      console.log(`[XmtpService] Set connection timestamp: ${this.connectionTimestamp}`);
       
       // Get the user's address and signer from auth service
       const userAddress = authService.getUserAddress();
       const ethersSigner = authService.getSigner();
+      console.log(`[XmtpService] Got user address: ${userAddress}`);
       
       if (!userAddress || !ethersSigner) {
+        console.error("[XmtpService] Failed to get wallet details");
         return { success: false, error: "Failed to get wallet details" };
       }
 
       // Create a signer for XMTP using ethers
+      console.log("[XmtpService] Creating XMTP signer");
       const signer: Signer = {
         getAddress: async () => userAddress,
         signMessage: async (message: string) => {
           try {
+            console.log("[XmtpService] Signing message with ethers");
             // Use ethers for consistent signing
             const signature = await ethersSigner.signMessage(message);
             
             // Convert the hex signature to Uint8Array as required by XMTP
             const signatureBytes = ethers.utils.arrayify(signature);
+            console.log("[XmtpService] Message signed successfully");
             
             return signatureBytes;
           } catch (err) {
-            console.error("Error signing message:", err);
+            console.error("[XmtpService] Error signing message:", err);
             throw err;
           }
         },
@@ -92,9 +107,11 @@ class XmtpService {
       };
 
       // Generate a random encryption key for the local database
+      console.log("[XmtpService] Generating encryption key");
       const encryptionKey = window.crypto.getRandomValues(new Uint8Array(32));
       
       // Create the XMTP client with codecs
+      console.log("[XmtpService] Creating XMTP client");
       this.client = await Client.create(
         signer,
         encryptionKey,
@@ -106,10 +123,11 @@ class XmtpService {
           ]
         }
       );
+      console.log("[XmtpService] XMTP client created successfully");
 
       return { success: true, address: userAddress };
     } catch (error) {
-      console.error("Error connecting to XMTP:", error);
+      console.error("[XmtpService] Error connecting to XMTP:", error);
       let errorMessage = "Failed to connect to XMTP";
       
       if (error instanceof Error) {
@@ -124,15 +142,18 @@ class XmtpService {
 
   // Disconnect from XMTP
   disconnect() {
+    console.log("[XmtpService] Disconnect method called");
     this.client = null;
     this.closeAllStreams();
     this.processedMessageIds.clear();
     this.pendingAudioMessages.clear();
     this.pendingTextMessages.clear();
+    console.log("[XmtpService] Disconnected and cleared all state");
   }
 
   // Close all message streams
   private closeAllStreams() {
+    console.log(`[XmtpService] Closing ${this.messageStreams.length} message streams`);
     for (const stream of this.messageStreams) {
       if (stream && typeof stream.return === 'function') {
         stream.return();
@@ -143,7 +164,9 @@ class XmtpService {
 
   // Check if connected to XMTP
   isConnected(): boolean {
-    return !!this.client;
+    const connected = !!this.client;
+    console.log(`[XmtpService] isConnected check: ${connected}`);
+    return connected;
   }
 
   // Get user address

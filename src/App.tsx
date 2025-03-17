@@ -51,38 +51,71 @@ function App() {
   const [currentMessage, setCurrentMessage] = useState<XmtpMessage | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isInitializing, setIsInitializing] = useState(true);
 
   // Check if already connected on mount
   useEffect(() => {
-    if (authService.isConnected()) {
-      setIsAuthConnected(true);
-      setUserAddress(authService.getUserAddress());
-    }
+    console.log("[App] Component mounted, checking connection status");
     
-    if (xmtpService.isConnected()) {
-      setIsXmtpConnected(true);
-    }
+    const initializeAuth = async () => {
+      try {
+        // Wait for auth service to initialize
+        console.log("[App] Waiting for auth service to initialize");
+        await authService.waitForInitialization();
+        console.log("[App] Auth service initialization complete");
+        
+        // Now check connection status
+        if (authService.isConnected()) {
+          const address = authService.getUserAddress();
+          console.log(`[App] Auth already connected with address: ${address}`);
+          setIsAuthConnected(true);
+          setUserAddress(address);
+        } else {
+          console.log("[App] Auth not connected");
+        }
+        
+        if (xmtpService.isConnected()) {
+          console.log("[App] XMTP already connected");
+          setIsXmtpConnected(true);
+        } else {
+          console.log("[App] XMTP not connected");
+        }
+      } catch (error) {
+        console.error("[App] Error during initialization:", error);
+      } finally {
+        setIsInitializing(false);
+      }
+    };
+    
+    initializeAuth();
   }, []);
   
   // Handle auth success
   const handleAuthSuccess = (address: string) => {
+    console.log(`[App] Auth success callback with address: ${address}`);
     setIsAuthConnected(true);
     setUserAddress(address);
   };
   
   // Handle XMTP success
   const handleXmtpSuccess = () => {
+    console.log("[App] XMTP success callback");
     setIsXmtpConnected(true);
     
     // Start listening for messages
+    console.log("[App] Starting XMTP message listener");
     xmtpService.startMessageListener((message) => {
+      console.log("[App] New message received from listener:", message.id);
       setCurrentMessage(message);
       setIsLoading(false);
     });
     
     // Load conversation history
+    console.log("[App] Loading conversation history");
     xmtpService.loadConversationWithBot().then((messages) => {
+      console.log(`[App] Loaded ${messages.length} messages from history`);
       if (messages.length > 0) {
+        console.log("[App] Setting current message from history");
         setCurrentMessage(messages[messages.length - 1]);
       }
     });
@@ -90,29 +123,36 @@ function App() {
   
   // Handle logout
   const handleLogout = () => {
+    console.log("[App] Logout handler called");
     authService.disconnect();
     xmtpService.disconnect();
     setIsAuthConnected(false);
     setIsXmtpConnected(false);
     setUserAddress("");
     setCurrentMessage(null);
+    console.log("[App] Logout complete");
   };
   
   // Handle message sent
   const handleMessageSent = () => {
+    console.log("[App] Message sent handler called");
     setCurrentMessage(null);
     setIsLoading(true);
   };
   
   // Handle error
   const handleError = (errorMessage: string) => {
+    console.error(`[App] Error handler called: ${errorMessage}`);
     setError(errorMessage);
     
     // Clear error after 5 seconds
     setTimeout(() => {
+      console.log("[App] Clearing error message");
       setError(null);
     }, 5000);
   };
+
+  console.log(`[App] Rendering with isAuthConnected: ${isAuthConnected}, isXmtpConnected: ${isXmtpConnected}, isInitializing: ${isInitializing}`);
 
   return (
     <WagmiProvider config={wagmiConfig}>
@@ -125,7 +165,12 @@ function App() {
           />
           
           <main className="flex-1 flex flex-col items-center justify-center p-4">
-            {!isAuthConnected || !isXmtpConnected ? (
+            {isInitializing ? (
+              <div className="flex flex-col items-center justify-center h-full">
+                <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+                <p className="mt-4 text-gray-400">Initializing...</p>
+              </div>
+            ) : !isAuthConnected || !isXmtpConnected ? (
               <div className="flex flex-col items-center justify-center h-full">
                 <h1 className="text-3xl font-bold mb-8 text-white">Voice Chat App</h1>
                 <ConnectButton 
