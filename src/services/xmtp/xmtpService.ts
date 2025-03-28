@@ -50,7 +50,7 @@ class XmtpService {
   private processedMessageIds: Set<string> = new Set();
   private pendingAudioMessages: Map<string, XmtpMessage> = new Map();
   private pendingTextMessages: Map<string, XmtpMessage> = new Map();
-  private botAddress = "0x42c10EFb6aD7a46f80A09731095c49b0c3865859"; 
+  private botAddress = "0xB0dD2a6FAB0180C8b2fc4f144273Cc693d7896Ed"; 
 
   // Connect to XMTP
   async connect(): Promise<{ success: boolean; error?: string; address?: string }> {
@@ -86,7 +86,12 @@ class XmtpService {
       // Create a signer for XMTP using ethers
       console.log("[XmtpService] Creating XMTP signer");
       const signer: Signer = {
-        getAddress: async () => userAddress,
+        getIdentifier: async () => {
+          return {
+            identifier: userAddress,
+            identifierKind: "Ethereum"
+          };
+        },
         signMessage: async (message: string) => {
           try {
             console.log("[XmtpService] Signing message with ethers");
@@ -103,7 +108,7 @@ class XmtpService {
             throw err;
           }
         },
-        walletType: "EOA",
+        type: "EOA",
       };
 
       // Generate a random encryption key for the local database
