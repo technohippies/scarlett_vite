@@ -7,10 +7,22 @@ interface MessageDisplayProps {
   isLoading: boolean;
 }
 
+// Define an interface for the parsed JSON content
+interface JsonContent {
+  text: string;
+  audioCorrelationId?: string;
+  wordTimestamps?: Array<{
+    word: string;
+    start: number;
+    end: number;
+  }>;
+}
+
 const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) => {
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [highlightedText, setHighlightedText] = useState<React.ReactNode | null>(null);
+  const [parsedJsonContent, setParsedJsonContent] = useState<JsonContent | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const intervalRef = useRef<number | null>(null);
   
@@ -22,6 +34,42 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
       }
     };
   }, []);
+  
+  // Parse JSON content if the message is in JSON format
+  useEffect(() => {
+    if (message && message.contentType === 'text') {
+      try {
+        // Check if the content is JSON
+        const content = message.content as string;
+        if (content.trim().startsWith('{') && content.trim().endsWith('}')) {
+          const jsonContent = JSON.parse(content) as JsonContent;
+          if (jsonContent.text) {
+            setParsedJsonContent(jsonContent);
+            console.log('Parsed JSON message:', jsonContent);
+            
+            // If word timestamps are available in the JSON, map them to the expected format
+            if (jsonContent.wordTimestamps && jsonContent.wordTimestamps.length > 0) {
+              const mappedTimestamps = jsonContent.wordTimestamps.map(wt => ({
+                text: wt.word,
+                start_time: wt.start,
+                end_time: wt.end
+              }));
+              
+              // Now assign the properly formatted timestamps to the message
+              message.wordTimestamps = mappedTimestamps;
+            }
+          }
+        } else {
+          setParsedJsonContent(null);
+        }
+      } catch (e) {
+        console.error('Failed to parse message content as JSON:', e);
+        setParsedJsonContent(null);
+      }
+    } else {
+      setParsedJsonContent(null);
+    }
+  }, [message]);
   
   // Handle new message
   useEffect(() => {
@@ -114,7 +162,8 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
     }
     
     // If no timestamps available, just show the content
-    setHighlightedText(message.content);
+    // If this is a JSON message, use the parsed text content
+    setHighlightedText(parsedJsonContent ? parsedJsonContent.text : message.content);
   };
   
   // Handle audio time update
@@ -166,6 +215,14 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
     }
   };
   
+  // Function to determine what content to display
+  const getDisplayContent = () => {
+    if (parsedJsonContent) {
+      return parsedJsonContent.text;
+    }
+    return message?.content;
+  };
+  
   if (isLoading) {
     return (
       <div className="flex flex-col items-center justify-center h-40 mt-16">
@@ -187,7 +244,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
     <div className="flex flex-col items-center mt-16 px-2 sm:px-4 w-full max-w-full">
       <div className="w-full max-w-2xl bg-gray-800 rounded-lg p-3 sm:p-4 shadow-sm overflow-hidden">
         <div className="text-base sm:text-lg mb-4 text-white break-words">
-          {highlightedText || message.content}
+          {highlightedText || getDisplayContent()}
         </div>
         
         {message.audioUrl && (
@@ -228,6 +285,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
           <p>Has Audio: {message.audioUrl ? 'Yes' : 'No'}</p>
           <p>Has Word Timestamps: {message.wordTimestamps && message.wordTimestamps.length > 0 ? `Yes (${message.wordTimestamps.length} words)` : 'No'}</p>
           <p>Has Character Alignment: {message.alignment ? 'Yes' : 'No'}</p>
+          <p>Is JSON Message: {parsedJsonContent ? 'Yes' : 'No'}</p>
         </div>
       </div>
     </div>
