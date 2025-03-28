@@ -107,7 +107,12 @@ function App() {
     xmtpService.startMessageListener((message) => {
       console.log("[App] New message received from listener:", message.id);
       setCurrentMessage(message);
-      setIsLoading(false);
+      
+      // Always turn off loading when we receive any message
+      if (isLoading) {
+        console.log("[App] Turning off loading state due to received message");
+        setIsLoading(false);
+      }
     });
     
     // Load conversation history
@@ -117,6 +122,7 @@ function App() {
       if (messages.length > 0) {
         console.log("[App] Setting current message from history");
         setCurrentMessage(messages[messages.length - 1]);
+        setIsLoading(false);
       }
     });
   };
@@ -138,6 +144,15 @@ function App() {
     console.log("[App] Message sent handler called");
     setCurrentMessage(null);
     setIsLoading(true);
+    
+    // Safety timeout to clear loading state in case we don't receive a response
+    setTimeout(() => {
+      if (isLoading) {
+        console.log("[App] Safety timeout: clearing loading state after 30 seconds");
+        setIsLoading(false);
+        setError("No response received in 30 seconds. Please try again.");
+      }
+    }, 30000);
   };
   
   // Handle error

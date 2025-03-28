@@ -287,10 +287,13 @@ class XmtpService {
                   wordTimestamps = jsonContent.content.word_timestamps;
                 }
                 
-                // Extract pair ID if available
+                // Extract pair ID if available - check both locations
                 if (jsonContent.content.pair_id) {
                   pairId = jsonContent.content.pair_id;
-                  console.log('Found pair ID in text message:', pairId);
+                  console.log('Found pair ID in text message content:', pairId);
+                } else if (jsonContent.pair_id) {
+                  pairId = jsonContent.pair_id;
+                  console.log('Found pair ID in root of text message:', pairId);
                 }
               } else {
                 displayContent = message.content;
@@ -413,6 +416,8 @@ class XmtpService {
     
     // Check if this message has a pair ID and needs to be paired
     if (pairId) {
+      console.log(`Processing message with pair ID ${pairId}. Has audio: ${!!audioUrl}, Has wordTimestamps: ${!!wordTimestamps}`);
+      
       // If it's an audio message
       if (audioUrl && !wordTimestamps) {
         console.log('Storing audio message with pair ID:', pairId);
@@ -434,7 +439,10 @@ class XmtpService {
           this.pendingTextMessages.delete(pairId);
           this.pendingAudioMessages.delete(pairId);
           
+          console.log('Returning combined message:', combinedMessage);
           return combinedMessage;
+        } else {
+          console.log('No matching text message found yet for pair ID:', pairId);
         }
         
         // No matching text message yet, return null and wait
@@ -442,7 +450,7 @@ class XmtpService {
       }
       
       // If it's a text message with word timestamps
-      if (wordTimestamps && !audioUrl) {
+      if (wordTimestamps) {
         console.log('Storing text message with pair ID:', pairId);
         this.pendingTextMessages.set(pairId, processedMessage);
         
@@ -462,12 +470,27 @@ class XmtpService {
           this.pendingTextMessages.delete(pairId);
           this.pendingAudioMessages.delete(pairId);
           
+          console.log('Returning combined message:', combinedMessage);
           return combinedMessage;
+        } else {
+          console.log('No matching audio message found yet for pair ID:', pairId);
+        }
+        
+        // If this is a text-only message with word timestamps but no pair ID,
+        // just return it directly to ensure it's displayed
+        if (pairId.startsWith('text-only-')) {
+          console.log('Text-only message with no pairing needed, returning directly');
+          return processedMessage;
         }
         
         // No matching audio message yet, return null and wait
         return null;
       }
+      
+      // Fallback - if we have a pair ID but don't fit into the above categories,
+      // store this message for potential future pairing but also return it to be displayed
+      console.log('Message has pair ID but does not fit specific pairing criteria, returning it directly');
+      return processedMessage;
     }
     
     // If the message doesn't have a pair ID or already has both audio and word timestamps, return it as is
@@ -529,9 +552,13 @@ class XmtpService {
           try {
             for await (const message of convStream) {
               if (message) {  // Check if message is defined
+                console.log('Received message from stream:', message.id);
                 const processedMessage = this.processMessage(message);
                 if (processedMessage) {
+                  console.log('Processed message, sending to listener:', processedMessage.id);
                   onNewMessage(processedMessage);
+                } else {
+                  console.log('Message returned null after processing (likely waiting for pairing)');
                 }
               }
             }
@@ -552,9 +579,13 @@ class XmtpService {
           try {
             for await (const message of convStream) {
               if (message) {  // Check if message is defined
+                console.log('Received message from stream:', message.id);
                 const processedMessage = this.processMessage(message);
                 if (processedMessage) {
+                  console.log('Processed message, sending to listener:', processedMessage.id);
                   onNewMessage(processedMessage);
+                } else {
+                  console.log('Message returned null after processing (likely waiting for pairing)');
                 }
               }
             }

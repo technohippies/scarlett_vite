@@ -2,7 +2,6 @@
 export interface RecordingState {
   isRecording: boolean;
   audioBlob?: Blob;
-  audioUrl?: string;
   error?: string;
 }
 
@@ -71,7 +70,7 @@ class AudioRecorderService {
   }
   
   // Stop recording
-  async stopRecording(): Promise<{ success: boolean; audioBlob?: Blob; audioUrl?: string; error?: string }> {
+  async stopRecording(): Promise<{ success: boolean; audioBlob?: Blob; error?: string }> {
     return new Promise((resolve) => {
       if (!this.mediaRecorder || !this.stream) {
         const error = "No active recording to stop";
@@ -88,9 +87,6 @@ class AudioRecorderService {
         // Create audio blob
         const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm' });
         
-        // Create audio URL
-        const audioUrl = URL.createObjectURL(audioBlob);
-        
         // Stop all tracks in the stream
         this.stream?.getTracks().forEach(track => track.stop());
         
@@ -98,14 +94,12 @@ class AudioRecorderService {
         this.recordingState = {
           isRecording: false,
           audioBlob,
-          audioUrl
         };
         
         // Resolve with audio data
         resolve({
           success: true,
           audioBlob,
-          audioUrl
         });
       };
       
@@ -124,10 +118,6 @@ class AudioRecorderService {
     if (this.stream) {
       this.stream.getTracks().forEach(track => track.stop());
       this.stream = null;
-    }
-    
-    if (this.recordingState.audioUrl) {
-      URL.revokeObjectURL(this.recordingState.audioUrl);
     }
     
     this.mediaRecorder = null;

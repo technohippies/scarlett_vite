@@ -16,6 +16,18 @@ interface JsonContent {
     start: number;
     end: number;
   }>;
+  // Add fields for audio_response format
+  message_type?: string;
+  content?: {
+    text: string;
+    word_timestamps?: Array<{
+      word: string;
+      start: number;
+      end: number;
+    }>;
+    pair_id?: string;
+  };
+  pair_id?: string;
 }
 
 const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) => {
@@ -43,10 +55,26 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
         const content = message.content as string;
         if (content.trim().startsWith('{') && content.trim().endsWith('}')) {
           const jsonContent = JSON.parse(content) as JsonContent;
-          if (jsonContent.text) {
-            setParsedJsonContent(jsonContent);
-            console.log('Parsed JSON message:', jsonContent);
-            
+          console.log('Parsed JSON message in MessageDisplay:', jsonContent);
+          
+          setParsedJsonContent(jsonContent);
+          
+          // Handle the audio_response format
+          if (jsonContent.message_type === 'audio_response' && jsonContent.content) {
+            // If word timestamps are available in the JSON, map them to the expected format
+            if (jsonContent.content.word_timestamps && jsonContent.content.word_timestamps.length > 0) {
+              const mappedTimestamps = jsonContent.content.word_timestamps.map(wt => ({
+                text: wt.word,
+                start_time: wt.start,
+                end_time: wt.end
+              }));
+              
+              // Now assign the properly formatted timestamps to the message
+              message.wordTimestamps = mappedTimestamps;
+            }
+          } 
+          // Handle the direct format
+          else if (jsonContent.text) {
             // If word timestamps are available in the JSON, map them to the expected format
             if (jsonContent.wordTimestamps && jsonContent.wordTimestamps.length > 0) {
               const mappedTimestamps = jsonContent.wordTimestamps.map(wt => ({
@@ -95,7 +123,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
     
     // Log message for debugging
     if (message) {
-      console.log('Message received:', message);
+      console.log('Message received in MessageDisplay:', message);
       console.log('Word timestamps:', message.wordTimestamps);
     }
   }, [message]);
@@ -163,7 +191,7 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
     
     // If no timestamps available, just show the content
     // If this is a JSON message, use the parsed text content
-    setHighlightedText(parsedJsonContent ? parsedJsonContent.text : message.content);
+    setHighlightedText(getDisplayContent());
   };
   
   // Handle audio time update
@@ -218,7 +246,14 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
   // Function to determine what content to display
   const getDisplayContent = () => {
     if (parsedJsonContent) {
-      return parsedJsonContent.text;
+      // Check for audio_response format first
+      if (parsedJsonContent.message_type === 'audio_response' && parsedJsonContent.content) {
+        return parsedJsonContent.content.text;
+      }
+      // Then check for direct text format
+      if (parsedJsonContent.text) {
+        return parsedJsonContent.text;
+      }
     }
     return message?.content;
   };
@@ -286,6 +321,8 @@ const MessageDisplay: React.FC<MessageDisplayProps> = ({ message, isLoading }) =
           <p>Has Word Timestamps: {message.wordTimestamps && message.wordTimestamps.length > 0 ? `Yes (${message.wordTimestamps.length} words)` : 'No'}</p>
           <p>Has Character Alignment: {message.alignment ? 'Yes' : 'No'}</p>
           <p>Is JSON Message: {parsedJsonContent ? 'Yes' : 'No'}</p>
+          <p>Message Format: {parsedJsonContent?.message_type || 'Unknown'}</p>
+          <p>Pair ID: {parsedJsonContent?.content?.pair_id || parsedJsonContent?.pair_id || message.pairId || 'None'}</p>
         </div>
       </div>
     </div>
