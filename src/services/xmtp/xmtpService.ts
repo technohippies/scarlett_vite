@@ -1,4 +1,4 @@
-import { Client, type Signer, DecodedMessage } from "@xmtp/browser-sdk";
+import { Client, type Signer, DecodedMessage, Dm, Group } from "@xmtp/browser-sdk";
 import { ethers } from "ethers";
 import {
   ContentTypeAttachment,
@@ -50,7 +50,7 @@ class XmtpService {
   private processedMessageIds: Set<string> = new Set();
   private pendingAudioMessages: Map<string, XmtpMessage> = new Map();
   private pendingTextMessages: Map<string, XmtpMessage> = new Map();
-  private botAddress = "0xB0dD2a6FAB0180C8b2fc4f144273Cc693d7896Ed"; 
+  private botInboxId = "633b88245faf4bf9ff6bf6423c413f0a4329c052ab7f728932998ca4a3b438ce"; 
 
   // Connect to XMTP
   async connect(): Promise<{ success: boolean; error?: string; address?: string }> {
@@ -191,8 +191,8 @@ class XmtpService {
         return { success: false, error: "Audio file is too large (max 1MB)" };
       }
       
-      // Create conversation with the bot
-      const conversation = await this.client.conversations.newDm(this.botAddress);
+      // Create conversation with the bot using inbox ID directly
+      const conversation = await this.client.conversations.newDm(this.botInboxId);
       
       // Convert Blob to Uint8Array
       const arrayBuffer = await audioData.arrayBuffer();
@@ -248,7 +248,7 @@ class XmtpService {
     const isNewMessage = messageSentTimestamp > this.connectionTimestamp;
     
     // Check if this is from the bot
-    const isFromBot = message.senderInboxId === this.botAddress;
+    const isFromBot = message.senderInboxId === this.botInboxId;
     
     const userAddress = authService.getUserAddress();
     
@@ -402,7 +402,7 @@ class XmtpService {
       content: displayContent,
       contentType: message.contentType?.typeId || 'unknown',
       sentAt,
-      isFromMe: message.senderInboxId === userAddress,
+      isFromMe: message.senderInboxId !== this.botInboxId,
       isFromBot,
       audioUrl: audioUrl || undefined,
       alignment,
@@ -504,20 +504,20 @@ class XmtpService {
       // List existing conversations
       const conversations = await this.client.conversations.list();
       
-      // Find conversation with the bot
-      const botConversations = await Promise.all(
-        conversations.map(async conv => {
-          // Check if it's a DM and has the right peer address
-          if ('peerInboxId' in conv) {
-            // peerInboxId is a function that returns a Promise<string>
-            const peerAddress = await conv.peerInboxId();
-            return peerAddress === this.botAddress ? conv : null;
+      // Find conversation with the bot using inbox ID
+      // Need to use async/await since peerInboxId is a function that returns a Promise<string>
+      let botConversation = null;
+      for (const conv of conversations) {
+        // Check if it's a DM conversation using instanceof
+        if (conv instanceof Dm) {
+          // peerInboxId is a function that returns a Promise<string>
+          const peerInboxId = await conv.peerInboxId();
+          if (peerInboxId === this.botInboxId) {
+            botConversation = conv;
+            break;
           }
-          return null;
-        })
-      );
-      
-      const botConversation = botConversations.find(conv => conv !== null);
+        }
+      }
       
       if (botConversation) {
         // Stream messages for the bot conversation
@@ -541,7 +541,7 @@ class XmtpService {
         })();
       } else {
         // No existing conversation with the bot, create one
-        const newConversation = await this.client.conversations.newDm(this.botAddress);
+        const newConversation = await this.client.conversations.newDm(this.botInboxId);
         
         // Stream messages for the new conversation
         const convStream = await newConversation.stream();
@@ -579,20 +579,20 @@ class XmtpService {
       // List existing conversations
       const conversations = await this.client.conversations.list();
       
-      // Find conversation with the bot
-      const botConversations = await Promise.all(
-        conversations.map(async conv => {
-          // Check if it's a DM and has the right peer address
-          if ('peerInboxId' in conv) {
-            // peerInboxId is a function that returns a Promise<string>
-            const peerAddress = await conv.peerInboxId();
-            return peerAddress === this.botAddress ? conv : null;
+      // Find conversation with the bot using inbox ID
+      // Need to use async/await since peerInboxId is a function that returns a Promise<string>
+      let botConversation = null;
+      for (const conv of conversations) {
+        // Check if it's a DM conversation using instanceof
+        if (conv instanceof Dm) {
+          // peerInboxId is a function that returns a Promise<string>
+          const peerInboxId = await conv.peerInboxId();
+          if (peerInboxId === this.botInboxId) {
+            botConversation = conv;
+            break;
           }
-          return null;
-        })
-      );
-      
-      const botConversation = botConversations.find(conv => conv !== null);
+        }
+      }
       
       if (!botConversation) {
         return [];
